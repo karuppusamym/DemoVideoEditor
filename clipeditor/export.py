@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
+from pathlib import Path
 
 from . import transitions
 from .encoders import codec_args
@@ -79,6 +81,8 @@ def build_command(project: Project, out_path: str, crf: int = 20, preset: str = 
     Text clips are rendered to PNGs in `workdir`. If it is None and the project has text
     clips, a temp dir is created that the caller owns (`export()` manages its own).
     """
+    if any(c.speed_ramp for track in project.tracks for c in track.clips):
+        raise ValueError("Speed ramps require the render engine.")
     W = width or project.width
     H = height or project.height
     W, H = W - W % 2, H - H % 2
@@ -204,53 +208,62 @@ def build_command(project: Project, out_path: str, crf: int = 20, preset: str = 
     return cmd, graph
 
 
+def check_cancelled(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise RuntimeError("Export cancelled")
+
+
+@contextmanager
+def export_destination(path: str, cancelled: Callable[[], bool] | None):
+    check_cancelled(cancelled)
+    destination = Path(path).resolve()
+    with tempfile.TemporaryDirectory(prefix=".clipeditor-", dir=destination.parent) as work:
+        pending = Path(work) / destination.name
+        yield str(pending)
+        check_cancelled(cancelled)
+        os.replace(pending, destination)
+
+
 def export(project: Project, out_path: str, progress: Callable[[float], None] | None = None,
            cancelled: Callable[[], bool] | None = None, **opts) -> None:
-    workdir = None
-    if opts.get("workdir") is None and _has_text(project):
-        workdir = tempfile.mkdtemp(prefix="clipeditor_text_")
-        opts["workdir"] = workdir
-    try:
-        cmd, graph = build_command(project, out_path, **opts)
-    except Exception:
-        if workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
-        raise
-    D = project.duration
-    fd, gpath = tempfile.mkstemp(suffix=".ffgraph")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(graph)
-    cmd = [gpath if a == "{GRAPH}" else a for a in cmd]
+    with export_destination(out_path, cancelled) as pending:
+        with tempfile.TemporaryDirectory(prefix="clipeditor_export_") as work:
+            if opts.get("workdir") is None:
+                opts["workdir"] = work
+            cmd, graph = build_command(project, pending, **opts)
+            graph_path = Path(work) / "graph.ffgraph"
+            graph_path.write_text(graph, encoding="utf-8")
+            cmd[cmd.index("{GRAPH}")] = str(graph_path)
+            _run_graph(cmd, project.duration, progress, cancelled)
+    if progress:
+        progress(1.0)
+
+
+def _run_graph(cmd, duration, progress, cancelled):
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            creationflags=flags)
-    err_tail: list[str] = []
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          encoding="utf-8", errors="replace", creationflags=flags) as proc:
+        err_tail: list[str] = []
 
-    def drain():
-        for line in proc.stderr:
-            err_tail.append(line)
-            del err_tail[:-40]
+        def drain():
+            for line in proc.stderr:
+                err_tail.append(line)
+                del err_tail[:-40]
 
-    th = threading.Thread(target=drain, daemon=True)
-    th.start()
-    try:
-        for line in proc.stdout:
-            if cancelled and cancelled():
-                proc.kill()
-                raise RuntimeError("Export cancelled")
-            m = re.match(r"out_time_us=(\d+)", line)
-            if m and progress:
-                progress(min(int(m.group(1)) / 1e6 / D, 1.0))
-        proc.wait()
-        th.join(timeout=2)
-        if proc.returncode != 0:
-            raise RuntimeError("FFmpeg failed:\n" + "".join(err_tail))
-        if progress:
-            progress(1.0)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
+        th = threading.Thread(target=drain, daemon=True)
+        th.start()
+        try:
+            for line in proc.stdout:
+                check_cancelled(cancelled)
+                m = re.match(r"out_time_us=(\d+)", line)
+                if m and progress:
+                    progress(min(int(m.group(1)) / 1e6 / duration, 0.99))
             proc.wait()
-        os.unlink(gpath)
-        if workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
+            if proc.returncode != 0:
+                th.join()
+                raise RuntimeError("FFmpeg failed:\n" + "".join(err_tail))
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            th.join()

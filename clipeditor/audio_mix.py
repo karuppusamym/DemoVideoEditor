@@ -10,6 +10,7 @@ import numpy as np
 from .media import AudioCache
 from .model import Project
 from . import animate, audio_fx
+from .retime import curve, ramp_audio
 from .transitions import audio_fades
 
 
@@ -79,7 +80,11 @@ def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = Fal
             speed = clip.speed if clip.speed > 0 else 1.0
             s0 = clip.source_time(a) * sr
             s_end = min(len(data), int(round(clip.out_point * sr)))
-            if abs(speed - 1.0) < 1e-9:
+            if clip.speed_ramp:
+                seg = ramp_audio(curve(clip.speed_ramp), data, clip.in_point, clip.out_point,
+                                 a - clip.start, length, sr)
+                off = o0
+            elif abs(speed - 1.0) < 1e-9:
                 i0 = int(round(s0))
                 lo = max(i0, 0)
                 hi = min(i0 + length, s_end)

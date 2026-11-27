@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from pathlib import Path
 
 from .media import DEFAULT_IMAGE_CLIP, probe
-from .model import MIN_CLIP, Clip, Project, Track, new_id
+from .model import MIN_CLIP, Clip, MediaAsset, Project, Track, new_id
+from .retime import validate_points
 
 
 class Editor:
@@ -132,8 +134,11 @@ class Editor:
         self.notify("load")
 
     def save(self, path: str | None = None):
-        self.path = path or self.path
-        self.project.save(self.path)
+        destination = path or self.path
+        if not destination:
+            raise ValueError("Choose a project file before saving.")
+        self.project.save(destination)
+        self.path = destination
         self.dirty = False
         self.notify("save")
 
@@ -144,6 +149,45 @@ class Editor:
         self.dirty = True
         self.notify("assets")
         return asset
+
+    def missing_media(self) -> list[MediaAsset]:
+        return [asset for asset in self.project.assets.values() if not Path(asset.path).is_file()]
+
+    def relink_media(self, folder: str) -> tuple[int, list[str]]:
+        """Relink missing files by filename, keeping all clip edits and timing."""
+        missing = self.missing_media()
+        filenames = {}
+        for asset in missing:
+            name = asset.name.casefold()
+            filenames[name] = filenames.get(name, 0) + 1
+        clips = {}
+        for track in self.project.tracks:
+            for clip in track.clips:
+                clips.setdefault(clip.asset_id, []).append(clip)
+        replacements = {}
+        unresolved = []
+        for asset in missing:
+            candidate = Path(folder) / asset.name
+            if filenames[asset.name.casefold()] > 1 or not candidate.is_file():
+                unresolved.append(asset.name)
+                continue
+            try:
+                media = probe(str(candidate))
+            except (OSError, ValueError):
+                unresolved.append(asset.name)
+                continue
+            if (media.kind != asset.kind or media.has_audio != asset.has_audio
+                    or (media.has_video and not (media.width and media.height))
+                    or (asset.kind != "image" and media.duration + MIN_CLIP < max(
+                        (clip.out_point for clip in clips.get(asset.id, ())), default=0.0))):
+                unresolved.append(asset.name)
+                continue
+            replacements[asset.id] = replace(media, id=asset.id, origin=asset.origin)
+        if replacements:
+            self.checkpoint()
+            self.project.assets.update(replacements)
+            self.notify("assets")
+        return len(replacements), unresolved
 
     # ---- clip ops --------------------------------------------------------
     def add_clip(self, asset_id: str, track_id: str | None = None, start: float | None = None) -> Clip | None:
@@ -385,19 +429,23 @@ class Editor:
             if target is None:
                 target = self.add_track("audio", notify=False)
             target.clips.append(Clip(new_id(), c.asset_id, c.start, c.in_point, c.out_point, c.volume,
-                                     speed=c.speed, fade_in=c.fade_in, fade_out=c.fade_out))
+                                     speed=c.speed, fade_in=c.fade_in, fade_out=c.fade_out,
+                                     speed_ramp=c.speed_ramp))
             c.volume = 0.0
         self.notify("edit")
 
     def set_clip_props(self, clip_id: str, **props):
-        _, c = self.project.find_clip(clip_id)
+        tr, c = self.project.find_clip(clip_id)
         if c is None:
             return
+        if "speed" in props:
+            props.setdefault("speed_ramp", ())
+        if "speed_ramp" in props:
+            props["speed_ramp"] = validate_points(props["speed_ramp"])
         self.checkpoint()
-        tr, _ = self.project.find_clip(clip_id)
         for k, v in props.items():
             setattr(c, k, v)
-        if "speed" in props or "out_point" in props or "in_point" in props:
+        if props.keys() & {"speed", "speed_ramp", "out_point", "in_point"}:
             asset = self.project.assets.get(c.asset_id)
             if asset is not None:
                 c.out_point = min(c.out_point, asset.duration)
@@ -447,6 +495,7 @@ class Editor:
         self.checkpoint()
         self.project.assets[asset.id] = asset
         dur = c.out_point - c.in_point
+        c.speed_ramp = tuple((source - c.in_point, rate) for source, rate in c.speed_ramp)
         c.asset_id = asset.id
         c.in_point = 0.0
         c.out_point = min(dur, asset.duration) if keep_timing else asset.duration

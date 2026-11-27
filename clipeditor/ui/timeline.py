@@ -349,7 +349,9 @@ class TimelineCanvas(QWidget):
             label += "   " + " ".join(badges)
         if not c.is_text and c.volume == 0 and asset.has_audio:
             label += "  · muted"
-        if abs(c.speed - 1) > 1e-3:
+        if c.speed_ramp:
+            label += "  · Speed ramp"
+        elif abs(c.speed - 1) > 1e-3:
             label += f"  · {c.speed:g}x"
         p.drawText(QRectF(r.left() + 4, r.top(), r.width() - 6, 14), Qt.AlignmentFlag.AlignVCenter, label)
         # fades: shaded triangles + draggable handles
@@ -520,7 +522,6 @@ class TimelineCanvas(QWidget):
         start0, in0, out0 = d["orig"]
         asset = self.ed.project.assets.get(c.asset_id)
         max_src = asset.duration if asset is not None else 3600.0
-        sp = c.speed
         self.snap_x = None
         if d["mode"] == "move":
             ns = max(0.0, start0 + dt)
@@ -539,14 +540,13 @@ class TimelineCanvas(QWidget):
             ns, g = self.snap(start0 + dt, d["pts"])
             self.snap_x = g
             delta = ns - start0  # timeline seconds
-            lo = -start0 if c.is_text else max(-in0 / sp, -start0)
-            delta = min(max(delta, lo), (out0 - in0) / sp - MIN_CLIP)
-            c.start, c.in_point = start0 + delta, in0 + delta * sp
+            lo = -start0 if c.is_text else max(c.time_between(in0, 0.0), -start0)
+            delta = min(max(delta, lo), c.time_between(in0, out0) - MIN_CLIP)
+            c.start, c.in_point = start0 + delta, c.source_after(in0, delta)
         elif d["mode"] == "trim_r":
-            ne, g = self.snap(start0 + (out0 - in0) / sp + dt, d["pts"])
+            ne, g = self.snap(start0 + c.time_between(in0, out0) + dt, d["pts"])
             self.snap_x = g
-            new_out = in0 + (ne - start0) * sp
-            c.out_point = min(max(new_out, in0 + MIN_CLIP * sp), max_src)
+            c.out_point = min(c.source_after(in0, max(ne - start0, MIN_CLIP)), max_src)
         elif d["mode"] == "fade_in":
             c.fade_in = round(min(max(self.x2t(pos.x()) - c.start, 0.0), c.duration - c.fade_out), 2)
         elif d["mode"] == "fade_out":

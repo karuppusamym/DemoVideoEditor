@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QSlider, QF
                                QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
 
 from ..editor import Editor
-from ..export import export
 from ..media import AudioCache
 from ..model import Project
 from .dialogs import ExportDialog, ShortcutsDialog, WelcomePage
@@ -293,6 +292,7 @@ class MainWindow(QMainWindow):
         self._act(f, "Save as…", lambda: self.save_project(True), "Ctrl+Shift+S")
         f.addSeparator()
         self._act(f, "Import media…", self.import_dialog, "Ctrl+I")
+        self._act(f, "Locate missing media…", self.relink_dialog)
         self._act(f, "Export video…", self.export_dialog, "Ctrl+E")
         f.addSeparator()
         canvas = f.addMenu("Canvas shape")
@@ -370,7 +370,7 @@ class MainWindow(QMainWindow):
         if reason == "marks":
             self.timeline.canvas.update()
             return
-        if reason in ("assets", "load"):
+        if reason in ("assets", "load", "undo", "redo"):
             for a in self.ed.project.assets.values():
                 self.loader.load(a)
             self.bin.refresh()
@@ -1143,15 +1143,34 @@ class MainWindow(QMainWindow):
         try:
             self.ed.open(path)
             self._remember(path)
-            missing = [a.name for a in self.ed.project.assets.values() if not os.path.exists(a.path)]
+            missing = self.ed.missing_media()
             if missing:
-                QMessageBox.warning(self, "Missing media", "These files were moved or deleted:\n\n" +
-                                    "\n".join(missing[:12]))
+                answer = QMessageBox.question(self, "Missing media",
+                                              f"{len(missing)} media file(s) are missing. Locate them now?")
+                if answer == QMessageBox.StandardButton.Yes:
+                    self.relink_dialog()
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "Couldn't open project", str(e))
         self._aspect_locked = True
         self.seek(0)
         QTimer.singleShot(50, self.zoom_fit)
+
+    def relink_dialog(self):
+        missing = self.ed.missing_media()
+        if not missing:
+            self.statusBar().showMessage("All media files are available.", 4000)
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Choose the folder containing missing media")
+        if not folder:
+            return
+        count, unresolved = self.ed.relink_media(folder)
+        if unresolved:
+            names = "\n".join(unresolved[:12])
+            more = f"\n…and {len(unresolved) - 12} more" if len(unresolved) > 12 else ""
+            QMessageBox.information(self, "Locate missing media",
+                                    f"Relinked {count} file(s). Still missing or unmatched:\n\n{names}{more}")
+        else:
+            self.statusBar().showMessage(f"Relinked {count} file(s).", 4000)
 
     def save_project(self, save_as: bool = False) -> bool:
         path = self.ed.path
@@ -1159,7 +1178,11 @@ class MainWindow(QMainWindow):
             path, _ = QFileDialog.getSaveFileName(self, "Save project", "My video.clipeditor.json", PROJECT_FILTER)
             if not path:
                 return False
-        self.ed.save(path)
+        try:
+            self.ed.save(path)
+        except (OSError, ValueError, TypeError) as error:
+            QMessageBox.warning(self, "Couldn't save project", str(error))
+            return False
         self._remember(path)
         self._clear_autosave()
         self.statusBar().showMessage(f"Saved ✓  {path}", 4000)

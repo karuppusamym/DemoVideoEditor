@@ -422,7 +422,7 @@ class EditorAPI:
                 asset = ed.project.assets.get(c.asset_id)
                 if asset is not None and b > asset.duration + 1e-6:
                     raise ToolError(f"out_point exceeds the source length ({asset.duration:.3f}s).")
-                if (b - a) / c.speed < MIN_CLIP:
+                if c.time_between(a, b) < MIN_CLIP:
                     raise ToolError("in_point must be before out_point.")
                 ed.set_clip_props(clip_id, in_point=a, out_point=b)
                 return {"ok": True, "clip": self._clip_info(c)}

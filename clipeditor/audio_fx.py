@@ -5,8 +5,8 @@ CONTRACT (used by clipeditor.audio_mix for preview AND export):
     active(clip) -> bool                       # needs processed audio (audio_fx or speed != 1)
     clip_audio(clip, asset, cache, wait=False) -> np.ndarray | None
         Returns the clip's audio ALREADY in timeline time: float32 stereo at cache.sr,
-        sample 0 == clip.start, length == clip.duration * sr (speed applied with pitch kept,
-        effects applied). If not ready and wait=False: start a background job and return None
+        sample 0 == clip.start, length == clip.duration * sr (constant speed keeps pitch,
+        ramps change pitch, effects applied). If not ready and wait=False: start a background job and return None
         (the mixer then falls back to raw audio). wait=True blocks until ready (export).
 
 Extras for the UI:
@@ -32,6 +32,8 @@ from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
+
+from .retime import curve, ramp_audio
 
 SR = 48000
 
@@ -261,16 +263,22 @@ def build_filter(speed: float, fx_list: list) -> tuple[str, str | None]:
     return "[0:a]" + ",".join(parts) + "[out]", (model_dirs[0] if model_dirs else None)
 
 
-def _run_ffmpeg(path: str, start: float, length: float, speed: float, fx_list: list) -> np.ndarray:
+def _run_ffmpeg(path: str, start: float, length: float, speed: float, fx_list: list,
+                input_samples: np.ndarray | None = None) -> np.ndarray:
     graph, cwd = build_filter(speed, fx_list)
     cmd = [ffmpeg_exe(), "-hide_banner", "-nostdin", "-loglevel", "error"]
-    if start > 0:
-        cmd += ["-ss", f"{start:.6f}"]
-    if length > 0:
-        cmd += ["-t", f"{length:.6f}"]
-    cmd += ["-i", os.path.abspath(path), "-vn", "-sn", "-filter_complex", graph, "-map", "[out]",
+    if input_samples is None:
+        if start > 0:
+            cmd += ["-ss", f"{start:.6f}"]
+        if length > 0:
+            cmd += ["-t", f"{length:.6f}"]
+        cmd += ["-i", os.path.abspath(path)]
+    else:
+        cmd += ["-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "pipe:0"]
+    cmd += ["-vn", "-sn", "-filter_complex", graph, "-map", "[out]",
             "-ac", "2", "-ar", str(SR), "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"]
-    proc = subprocess.run(cmd, capture_output=True, cwd=cwd, creationflags=_NO_WINDOW)
+    data = None if input_samples is None else input_samples.astype("<f4", copy=False).tobytes()
+    proc = subprocess.run(cmd, input=data, capture_output=True, cwd=cwd, creationflags=_NO_WINDOW)
     if proc.returncode != 0:
         msg = proc.stderr.decode("utf-8", "replace").strip().splitlines()
         raise RuntimeError(msg[-1] if msg else f"ffmpeg exited {proc.returncode}")
@@ -310,7 +318,7 @@ _pool = ThreadPoolExecutor(2, thread_name_prefix="audio_fx")
 
 
 def active(clip) -> bool:
-    return bool(clip.audio_fx) or abs(clip.speed - 1.0) > 1e-6
+    return bool(clip.audio_fx) or (not clip.speed_ramp and abs(clip.speed - 1.0) > 1e-6)
 
 
 def _key(clip, asset, sr: int) -> tuple | None:
@@ -321,7 +329,7 @@ def _key(clip, asset, sr: int) -> tuple | None:
     except Exception:
         fx = repr(clip.audio_fx)
     return (asset.path, round(float(clip.in_point), 6), round(float(clip.out_point), 6),
-            round(float(clip.speed or 1.0), 6), fx, sr)
+            round(float(clip.speed or 1.0), 6), fx, sr, clip.speed_ramp)
 
 
 def _store(key: tuple, arr: np.ndarray) -> None:
@@ -337,12 +345,20 @@ def _store(key: tuple, arr: np.ndarray) -> None:
 
 
 def _render(key: tuple) -> np.ndarray:
-    path, a, b, speed, fx_json, sr = key
+    path, a, b, speed, fx_json, sr, ramp_points = key
     fx_list = json.loads(fx_json) if fx_json.startswith("[") else []
     speed = speed if speed > 0 else 1.0
-    n = int(round((b - a) / speed * sr))
     try:
-        arr = _fit(_resample(_run_ffmpeg(path, a, b - a, speed, fx_list), sr), n)
+        if ramp_points:
+            ramp = curve(ramp_points)
+            duration = ramp.timeline_at(b) - ramp.timeline_at(a)
+            original = _run_ffmpeg(path, a, b - a, 1.0, [])
+            warped = ramp_audio(ramp, original, a, b, 0.0, round(duration * SR), SR, source_origin=a)
+            processed = _run_ffmpeg(path, 0.0, 0.0, 1.0, fx_list, input_samples=warped)
+        else:
+            duration = (b - a) / speed
+            processed = _run_ffmpeg(path, a, b - a, speed, fx_list)
+        arr = _fit(_resample(processed, sr), round(duration * sr))
     except Exception as e:  # noqa: BLE001
         with _lock:
             _errors[key] = str(e) or e.__class__.__name__
@@ -400,8 +416,8 @@ def status(clip, asset=None, sr: int = SR) -> str:
         if key is None:
             # no asset given: look for any entry for this clip's params
             fx = json.dumps(clip.audio_fx or [], sort_keys=True, default=str)
-            match = lambda k: (k[1], k[2], k[3], k[4]) == (round(clip.in_point, 6), round(clip.out_point, 6),
-                                                         round(clip.speed or 1.0, 6), fx)
+            match = lambda k: (k[1], k[2], k[3], k[4], k[6]) == (round(clip.in_point, 6), round(clip.out_point, 6),
+                                                               round(clip.speed or 1.0, 6), fx, clip.speed_ramp)
             if any(match(k) for k in _cache):
                 return "ready"
             if any(match(k) for k in _inflight):

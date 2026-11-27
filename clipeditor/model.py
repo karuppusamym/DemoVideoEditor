@@ -8,6 +8,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .retime import curve, validate_points
+
 MIN_CLIP = 1 / 30  # shortest clip allowed, seconds
 
 
@@ -39,7 +41,7 @@ class MediaAsset:
 class Clip:
     """A piece of media (or a text title) placed on a track.
 
-    Timeline length = (out_point - in_point) / speed.
+    Timeline length depends on the playback speed across the source range.
     A text clip has asset_id == "" and `text` set; its in/out are 0..length.
     """
     id: str
@@ -93,6 +95,11 @@ class Clip:
     masks: list = field(default_factory=list)  # [{"shape": rect|ellipse|linear|mirror, "x","y","w","h","angle","feather","invert"}]
     audio_fx: list = field(default_factory=list)  # [{"type": str, "params": {..}}] (clipeditor.audio_fx)
     shape: dict | None = None  # shape clip (asset_id ""), see clipeditor.shapes
+    speed_ramp: tuple[tuple[float, float], ...] = ()  # (absolute source seconds, playback rate)
+
+    def __post_init__(self):
+        if self.speed_ramp:
+            self.speed_ramp = validate_points(self.speed_ramp)
 
     @property
     def is_text(self) -> bool:
@@ -109,14 +116,26 @@ class Clip:
 
     @property
     def duration(self) -> float:
-        return (self.out_point - self.in_point) / self.speed
+        return self.time_between(self.in_point, self.out_point)
 
     @property
     def end(self) -> float:
         return self.start + self.duration
 
     def source_time(self, t: float) -> float:
-        return self.in_point + (t - self.start) * self.speed
+        return self.source_after(self.in_point, t - self.start)
+
+    def time_between(self, first: float, last: float) -> float:
+        if not self.speed_ramp:
+            return (last - first) / self.speed
+        ramp = curve(self.speed_ramp)
+        return ramp.timeline_at(last) - ramp.timeline_at(first)
+
+    def source_after(self, start: float, seconds: float) -> float:
+        if not self.speed_ramp:
+            return start + seconds * self.speed
+        ramp = curve(self.speed_ramp)
+        return ramp.source_at(ramp.timeline_at(start) + seconds)
 
     def fade_gain(self, t: float) -> float:
         """0..1 multiplier from fades at timeline time t."""
@@ -259,13 +278,18 @@ class Project:
 
     def save(self, path: str) -> None:
         # Replace the previous save only after the new file is fully written.
-        destination = os.path.realpath(path)
+        destination = Path(path).resolve()
+        data = self.to_dict()
+        for asset in data["assets"]:
+            media = Path(asset["path"])
+            if media.is_absolute() and media.is_relative_to(destination.parent):
+                asset["path"] = media.relative_to(destination.parent).as_posix()
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
-                                             dir=os.path.dirname(destination), suffix=".tmp") as f:
+                                             dir=destination.parent, suffix=".tmp") as f:
                 temporary = Path(f.name)
-                json.dump(self.to_dict(), f, indent=2)
+                json.dump(data, f, indent=2)
             os.replace(temporary, destination)
         finally:
             if temporary is not None:
@@ -273,5 +297,10 @@ class Project:
 
     @classmethod
     def load(cls, path: str) -> "Project":
-        with open(path, encoding="utf-8") as f:
-            return cls.from_dict(json.load(f))
+        source = Path(path).resolve()
+        with source.open(encoding="utf-8") as f:
+            project = cls.from_dict(json.load(f))
+        for asset in project.assets.values():
+            if asset.path and not Path(asset.path).is_absolute():
+                asset.path = os.path.abspath(source.parent / asset.path)
+        return project

@@ -16,13 +16,14 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 
 from . import animate, audio_fx, effects, masks
 from .encoders import codec_args
 from .export import export as export_graph
-from .export import ffmpeg_exe
+from .export import check_cancelled, export_destination, ffmpeg_exe
 from .model import Project
 
 _NOWIN = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -33,6 +34,8 @@ def needs_render_engine(project: Project) -> list[str]:
     why = set()
     for tr in project.tracks:
         for c in tr.clips:
+            if c.speed_ramp:
+                why.add("speed ramps")
             if animate.active(c):
                 why.add("keyframes/animations")
             if effects.active(c):
@@ -50,12 +53,13 @@ def needs_render_engine(project: Project) -> list[str]:
     return sorted(why)
 
 
-def _timeline_audio(project: Project, sr: int = 48000) -> np.ndarray:
+def _timeline_audio(project: Project, sr: int = 48000, cancelled=None) -> np.ndarray:
     from .audio_mix import mix
     from .media import AudioCache
 
     cache = AudioCache(sr)
     for a in project.assets.values():
+        check_cancelled(cancelled)
         if a.has_audio:
             cache.load(a)
     D = project.duration
@@ -63,6 +67,7 @@ def _timeline_audio(project: Project, sr: int = 48000) -> np.ndarray:
     out = np.zeros((n_total, 2), np.float32)
     step = sr * 5
     for i0 in range(0, n_total, step):
+        check_cancelled(cancelled)
         n = min(step, n_total - i0)
         out[i0:i0 + n] = mix(project, cache, i0 / sr, n, wait=True)
     return out
@@ -86,48 +91,48 @@ def export_render(project: Project, out_path: str, progress: Callable[[float], N
     n_frames = max(int(round(D * fps)), 1)
     prog = progress or (lambda _v: None)
 
-    prog(0.0)
-    audio = _timeline_audio(project)
-    fd, apath = tempfile.mkstemp(suffix=".f32")
-    with os.fdopen(fd, "wb") as f:
-        f.write(audio.tobytes())
-    del audio
+    with export_destination(out_path, cancelled) as pending:
+        prog(0.0)
+        with tempfile.TemporaryDirectory(prefix="clipeditor_audio_") as work:
+            apath = str(Path(work) / "audio.f32")
+            _timeline_audio(project, cancelled=cancelled).tofile(apath)
+            cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-v", "error",
+                   "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
+                   "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", apath,
+                   "-map", "0:v", "-map", "1:a",
+                   *codec_args(codec, gpu, crf, preset, ten_bit),
+                   "-c:a", "aac", "-b:a", "192k", "-t", f"{D:.4f}", "-movflags", "+faststart", pending]
+            comp = Compositor(use_proxies=False)
+            try:
+                _write_frames(cmd, comp, project, W, H, fps, n_frames, prog, cancelled)
+            finally:
+                comp.close()
+    prog(1.0)
 
-    cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-v", "error",
-           "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
-           "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", apath,
-           "-map", "0:v", "-map", "1:a",
-           *codec_args(codec, gpu, crf, preset, ten_bit),
-           "-c:a", "aac", "-b:a", "192k", "-t", f"{D:.4f}", "-movflags", "+faststart", out_path]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NOWIN)
-    err: list[bytes] = []
-    th = threading.Thread(target=lambda: err.extend(proc.stderr.readlines()), daemon=True)
-    th.start()
-    comp = Compositor(use_proxies=False)
-    try:
-        for i in range(n_frames):
-            if cancelled and cancelled():
-                raise RuntimeError("Export cancelled")
-            img = comp.render(project, i / fps, W, H)
-            ptr = img.constBits()
-            proc.stdin.write(bytes(ptr)[: W * H * 4])
-            if i % 3 == 0:
-                prog(0.02 + 0.97 * (i + 1) / n_frames)
-        proc.stdin.close()
-        proc.wait()
-        th.join(timeout=2)
+
+def _write_frames(cmd, comp, project, width, height, fps, count, progress, cancelled):
+    with subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NOWIN) as proc:
+        err: list[bytes] = []
+        th = threading.Thread(target=lambda: err.extend(proc.stderr.readlines()), daemon=True)
+        th.start()
+        try:
+            for i in range(count):
+                check_cancelled(cancelled)
+                img = comp.render(project, i / fps, width, height)
+                proc.stdin.write(img.constBits())
+                if i % 3 == 0:
+                    progress(0.02 + 0.97 * (i + 1) / count)
+            proc.stdin.close()
+            proc.wait()
+        except BrokenPipeError:
+            proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            th.join()
         if proc.returncode != 0:
             raise RuntimeError("FFmpeg failed:\n" + b"".join(err[-30:]).decode(errors="replace"))
-        prog(1.0)
-    finally:
-        comp.close()
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-        try:
-            os.unlink(apath)
-        except OSError:
-            pass
 
 
 def export_video(project: Project, out_path: str, progress=None, cancelled=None, engine: str = "auto",

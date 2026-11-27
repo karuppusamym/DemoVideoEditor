@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Lock
 
 import numpy as np
 
@@ -29,12 +31,18 @@ class AssetLoader(QObject):
         self.audio = audio
         self.thumbs: dict[str, list[tuple[float, QImage]]] = {}
         self._pool = ThreadPoolExecutor(max_workers=3)
-        self._started: set[str] = set()
+        self._started: dict[str, str] = {}
+        self._lock = Lock()
 
     def load(self, asset: MediaAsset):
-        if asset.id in self._started:
+        with self._lock:
+            if self._started.get(asset.id) == asset.path:
+                return
+            self._started[asset.id] = asset.path
+            self.thumbs.pop(asset.id, None)
+        self.audio.set_asset_path(asset)
+        if not Path(asset.path).is_file():
             return
-        self._started.add(asset.id)
         if asset.kind == "image":
             img = QImage(asset.path)
             if not img.isNull():
@@ -52,9 +60,15 @@ class AssetLoader(QObject):
             for t, arr in thumbnails(asset.path, asset.duration, step=step):
                 out.append((t, ndarray_to_qimage(arr)))
                 if len(out) == 1:
-                    self.thumbs[asset.id] = list(out)
+                    with self._lock:
+                        if self._started[asset.id] != asset.path:
+                            return
+                        self.thumbs[asset.id] = list(out)
                     self.thumbs_ready.emit(asset.id)
-            self.thumbs[asset.id] = out
+            with self._lock:
+                if self._started[asset.id] != asset.path:
+                    return
+                self.thumbs[asset.id] = out
             self.thumbs_ready.emit(asset.id)
         except Exception as e:  # noqa: BLE001
             self.failed.emit(asset.id, f"thumbnails: {e}")

@@ -8,4 +8,5 @@ __pycache__/
 /samples/
 /p.out
 /clipeditor/assets/sfx/
+/dist/
 *.ffgraph

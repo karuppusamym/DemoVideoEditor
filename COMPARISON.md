@@ -1,6 +1,6 @@
 # ClipEditor vs. other video editors
 
-This is an honest snapshot (v0.5). ✅ means built and tested, 🟡 means partial, and ❌ means not yet built.
+This is the v0.6 feature snapshot. ✅ means built and tested, 🟡 means partial, and ❌ means not yet built.
 The entries for other products come from their public feature lists, so check them before you rely on them.
 
 ## Feature by feature, vs. Concat
@@ -17,7 +17,7 @@ The entries for other products come from their public feature lists, so check th
 | Titles & shapes | ✅ | ✅ 10 text styles, 22 shapes, 24 colour emoji stickers, gradients/outline/shadow |
 | Blend modes, crop, flip | ✅ | ✅ 13 blend modes, crop, mirror/flip, rotate |
 | Masks + chroma key | ✅ | ✅ rect/ellipse/linear/mirror masks with feather + invert; green-screen key with spill |
-| Speed, ramps/curves, freeze, reverse | ✅ | ✅ constant speed (pitch-correct), freeze, reverse, optical-flow slow-mo · ❌ speed ramps/curves |
+| Speed, ramps/curves, freeze, reverse | ✅ | ✅ constant speed (pitch-correct), three-point speed ramps, freeze, reverse, optical-flow slow-mo |
 | Auto captions (local) | ✅ | ✅ Whisper, any language, 2 styles |
 | Voice isolation | ✅ | 🟡 AI noise removal (RNNoise) + voice enhance; no stem separation yet |
 | Text-to-speech + voice cloning | ✅ | 🟡 TTS with Windows voices (Piper optional) · ❌ voice cloning |
@@ -61,7 +61,7 @@ The entries for other products come from their public feature lists, so check th
 - Export of heavily effected timelines is slower than in GPU-native engines, because the render engine runs in Python on the CPU.
 
 ## Next milestones (in order)
-1. Speed ramps + a graphical keyframe curve editor
+1. A graphical keyframe curve editor
 2. Multiple timelines per project, plus nested sequences
 3. Stem separation (Demucs) and voice cloning (an open TTS such as XTTS/F5), as optional downloads
 4. A GPU/parallel render engine (multiprocess frame rendering, then an OpenGL compositor)

@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QFontComboBox, QFrame, QGridLayout,
+from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit,
                                QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
-from .. import animate
+from .. import animate, audio_fx
 from ..editor import Editor
+from ..retime import MAX_RATE, MIN_RATE, curve
 from ..transitions import DEFAULT_DURATION, KINDS, max_duration, neighbour_before, prev_clip
 from .timeline import fmt_time
 
@@ -482,6 +483,24 @@ class Inspector(QWidget):
         sec.add("Fade in", self.row("fade_in", 0, 5, 0, fmt=lambda v: f"{v:.1f}s"))
         sec.add("Fade out", self.row("fade_out", 0, 5, 0, fmt=lambda v: f"{v:.1f}s"))
         lay.addWidget(sec)
+        self.ramp_section = Section("Speed ramp")
+        self.ramp_rates = []
+        for label in ("Start", "Middle", "End"):
+            rate = QDoubleSpinBox()
+            rate.setRange(MIN_RATE, MAX_RATE)
+            rate.setSingleStep(0.25)
+            rate.setSuffix("x")
+            self.ramp_section.add(label, rate)
+            self.ramp_rates.append(rate)
+        self.ramp_status = QLabel()
+        self.ramp_section.full(self.ramp_status)
+        apply = QPushButton("Apply speed ramp")
+        apply.clicked.connect(self._apply_ramp)
+        self.ramp_section.full(apply)
+        self.clear_ramp = QPushButton("Use constant speed")
+        self.clear_ramp.clicked.connect(lambda: self.ed.set_clip_props(self.clip_id, speed_ramp=()))
+        self.ramp_section.full(self.clear_ramp)
+        lay.addWidget(self.ramp_section)
         tr = Section("⇄  Transition from previous clip")
         self.trans_kind = QComboBox()
         self.trans_kind.addItem("None (hard cut)", "")
@@ -497,6 +516,13 @@ class Inspector(QWidget):
         lay.addWidget(tr)
         lay.addStretch(1)
         self.tab_speed = page
+
+    def _apply_ramp(self):
+        _, clip = self.ed.project.find_clip(self.clip_id)
+        if clip is not None and clip.out_point > clip.in_point:
+            middle = (clip.in_point + clip.out_point) / 2
+            points = zip((clip.in_point, middle, clip.out_point), (rate.value() for rate in self.ramp_rates))
+            self.ed.set_clip_props(clip.id, speed_ramp=points)
 
     def _build_audio(self):
         page, lay = _page()
@@ -738,7 +764,14 @@ class Inspector(QWidget):
         # speed + transition
         idx = min(range(len(SPEEDS)), key=lambda i: abs(SPEEDS[i] - c.speed))
         self.speed.setCurrentIndex(idx)
-        self.speed.setEnabled(not c.is_generated and (a is None or a.kind != "image"))
+        can_retime = not c.is_generated and a is not None and a.kind != "image"
+        self.speed.setEnabled(can_retime and not c.speed_ramp)
+        self.ramp_section.setEnabled(can_retime)
+        self.clear_ramp.setEnabled(bool(c.speed_ramp))
+        self.ramp_status.setText("Ramp active · audio pitch follows speed" if c.speed_ramp else "")
+        for widget, fraction in zip(self.ramp_rates, (0.0, 0.5, 1.0)):
+            source = c.in_point + (c.out_point - c.in_point) * fraction
+            widget.setValue(curve(c.speed_ramp).rate_at(source) if c.speed_ramp else c.speed)
         prev = prev_clip(tr, c) if c.transition > 0 else neighbour_before(tr, c)
         self.sec_trans.setVisible(prev is not None)
         if prev is not None:
@@ -750,11 +783,9 @@ class Inspector(QWidget):
         for i in range(self.afx.count()):
             it = self.afx.item(i)
             it.setCheckState(Qt.CheckState.Checked if it.data(Qt.ItemDataRole.UserRole) in on else Qt.CheckState.Unchecked)
-        if c.audio_fx or abs(c.speed - 1) > 1e-6:
+        if audio_fx.active(c):
             try:
-                from .. import audio_fx
-
-                st = audio_fx.status(c, a) if hasattr(audio_fx, "status") else ""
+                st = audio_fx.status(c, a)
                 self.afx_status.setText({"processing": "⏳ Processing audio…", "ready": "✓ Ready"}.get(st, st))
             except Exception:  # noqa: BLE001
                 self.afx_status.setText("")

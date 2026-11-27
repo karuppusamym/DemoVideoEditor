@@ -205,16 +205,29 @@ class AudioCache:
         self.sr = sr
         self._data: dict[str, np.ndarray] = {}
         self._peaks: dict[str, np.ndarray] = {}
+        self._paths: dict[str, str] = {}
         self._lock = threading.Lock()
 
+    def set_asset_path(self, asset: MediaAsset) -> None:
+        """Invalidate cached audio when an asset ID is relinked to a different file."""
+        with self._lock:
+            if self._paths.get(asset.id) != asset.path:
+                self._paths[asset.id] = asset.path
+                self._data.pop(asset.id, None)
+                self._peaks.pop(asset.id, None)
+
     def load(self, asset: MediaAsset) -> None:
-        if not asset.has_audio or asset.id in self._data:
+        if not asset.has_audio:
             return
+        with self._lock:
+            if self._paths.setdefault(asset.id, asset.path) != asset.path or asset.id in self._data:
+                return
         data = load_audio(asset.path, self.sr)
         peaks = waveform_peaks(data, self.sr)
         with self._lock:
-            self._data[asset.id] = data
-            self._peaks[asset.id] = peaks
+            if self._paths[asset.id] == asset.path:
+                self._data[asset.id] = data
+                self._peaks[asset.id] = peaks
 
     def get(self, asset_id: str) -> np.ndarray | None:
         return self._data.get(asset_id)

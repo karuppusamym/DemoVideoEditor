@@ -19,6 +19,10 @@ From the repository root, run these commands in PowerShell.
 
 Pytest generates the video and audio fixtures in a temporary directory. Run `pytest -m model` with the virtual environment active to try the optional Whisper and background-removal integration tests. These tests may download models. The caption test also needs an English text-to-speech voice, and background removal needs `rembg[cpu]`.
 
+## Build the Windows ZIP
+
+Run `.\.venv\Scripts\python.exe portable\build.py --ref HEAD` on x64 Windows with Python 3.13. The builder packages the selected Git revision with the Python runtime and writes the ZIP and its SHA-256 checksum to `dist/`. Extract the ZIP into a fresh folder and test first launch and export before uploading it to a GitHub release.
+
 ## Report a bug
 
 Include your OS and Python version, the commit or branch, steps to reproduce, and the expected and actual behavior. Include a short log or a synthetic media sample if it helps reproduce the problem. Remove credentials, private file paths, and personal media before posting. Report potential security issues privately using the [security policy](SECURITY.md).
