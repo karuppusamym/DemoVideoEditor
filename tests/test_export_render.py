@@ -121,6 +121,9 @@ def test_parallel_matches_single_process(tmp_path, monkeypatch, parallel):
     assert seen[0] == 0.0 and seen[-1] == 1.0
     assert all(b >= a for a, b in zip(seen, seen[1:])), "progress must never go backwards"
     assert len(seen) > 10
+    # segment starts depend on this machine's core count (CI runners have fewer cores than dev PCs)
+    seg_starts = {start for start, _ in er._chunks(180, er.parallel_workers(180))}
+    assert len(seg_starts) > 1
 
     monkeypatch.setenv("CLIPEDITOR_EXPORT_WORKERS", "1")
     one = str(tmp_path / "one.mp4")
@@ -132,11 +135,12 @@ def test_parallel_matches_single_process(tmp_path, monkeypatch, parallel):
     assert sorted(pf) == sorted(sf) == list(range(180))  # every frame, evenly timed, no gaps/dupes
     assert abs(pdur - 6.0) < 0.05 and abs(pdur - sdur) < 0.03
     assert paudio
-    for i in (0, 29, 30, 31, 89, 90, 150, 179):  # includes segment boundaries (6 chunks of 30)
+    boundary_frames = sorted({0, 179} | {s for s in seg_starts} | {s - 1 for s in seg_starts if s})
+    for i in boundary_frames:  # frames on both sides of every segment boundary
         assert np.abs(pf[i] - sf[i]).mean() < 2, f"frame {i} differs"
     with av.open(par) as c:  # the joined stream plays straight through
         for pkt in c.demux(video=0):
-            if pkt.pts is not None and round(float(pkt.pts * pkt.time_base) * 30) % 30 == 0:
+            if pkt.pts is not None and round(float(pkt.pts * pkt.time_base) * 30) in seg_starts:
                 assert pkt.is_keyframe  # every segment starts on a keyframe
 
 
