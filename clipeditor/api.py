@@ -204,6 +204,9 @@ class EditorAPI:
         return tr, c
 
     def _clip_name(self, c) -> str:
+        if c.sequence_id:
+            source = self.editor.project.timelines.get(c.sequence_id)
+            return source.name if source is not None else "(missing timeline)"
         if c.text is not None:
             return f"Text: {c.text[:40]}"
         if c.shape is not None:
@@ -216,6 +219,8 @@ class EditorAPI:
              "duration": _r(c.duration)}
         if c.asset_id:
             d.update(asset_id=c.asset_id, in_point=_r(c.in_point), out_point=_r(c.out_point))
+        elif c.sequence_id:
+            d.update(sequence_id=c.sequence_id, in_point=_r(c.in_point), out_point=_r(c.out_point))
         for k, default in (("speed", 1.0), ("volume", 1.0), ("opacity", 1.0)):
             if getattr(c, k) != default or full:
                 d[k] = getattr(c, k)
@@ -234,9 +239,8 @@ class EditorAPI:
         return os.path.abspath(path)
 
     def _load_audio(self, project: Project):
-        for aid in {c.asset_id for t in project.tracks for c in t.clips if c.asset_id}:
-            a = project.assets.get(aid)
-            if a is not None and a.has_audio and self.cache.get(aid) is None:
+        for a in project.timeline_assets():
+            if a.has_audio and self.cache.get(a.id) is None:
                 self.cache.load(a)
 
     def _tool(self, name: str, description: str, schema: dict):
@@ -312,6 +316,16 @@ class EditorAPI:
            _obj({"timeline": timeline_ref}, ("timeline",)))
         def switch_timeline(timeline):
             return self._run(lambda: {"ok": True, "timeline": self._timeline_info(ed.switch_timeline(timeline))})
+
+        @T("add_sequence", "Place a linked timeline as a nested clip in the active timeline. Times are seconds.",
+           _obj({"timeline": timeline_ref, "track": {"type": "string"},
+                 "start": {"type": "number", "minimum": 0}}, ("timeline",)))
+        def add_sequence(timeline, track=None, start=None):
+            def f():
+                target = self._track(track)
+                clip = ed.add_sequence(timeline, target.id if target else None, start)
+                return {"ok": True, "clip": self._clip_info(clip)}
+            return self._run(f)
 
         @T("rename_timeline", "Rename a timeline in this project. Names must be unique.",
            _obj({"timeline": timeline_ref, "name": {"type": "string"}}, ("timeline", "name")))
@@ -447,7 +461,7 @@ class EditorAPI:
             def f():
                 src, c = self._clip(clip_id)
                 dst = self._track(track) or src
-                asset = ed.project.assets.get(c.asset_id) if c.asset_id else None
+                asset = ed.project.asset_for_clip(c)
                 if not dst.accepts(asset):
                     raise ToolError(f"Track {dst.name} ({dst.kind}) can't hold this clip.")
                 ed.checkpoint()
@@ -469,10 +483,12 @@ class EditorAPI:
                 _, c = self._clip(clip_id)
                 a = in_point if in_point is not None else c.in_point
                 b = out_point if out_point is not None else c.out_point
-                asset = ed.project.assets.get(c.asset_id)
-                if asset is not None and b > asset.duration + 1e-6:
-                    raise ToolError(f"out_point exceeds the source length ({asset.duration:.3f}s).")
-                if c.time_between(a, b) < MIN_CLIP:
+                asset = ed.project.asset_for_clip(c)
+                limit = max(asset.duration, c.out_point) if asset is not None and c.sequence_id else (
+                    asset.duration if asset is not None else None)
+                if limit is not None and b > limit + 1e-6:
+                    raise ToolError(f"out_point exceeds the source length ({limit:.3f}s).")
+                if c.time_between(a, b) < ed.frame() - 1e-9:
                     raise ToolError("in_point must be before out_point.")
                 ed.set_clip_props(clip_id, in_point=a, out_point=b)
                 return {"ok": True, "clip": self._clip_info(c)}

@@ -218,6 +218,8 @@ class Editor:
         ids = list(self.project.timelines)
         if len(ids) == 1:
             raise ValueError("Keep at least one timeline in the project.")
+        if any(timeline.id in self.project.sequence_dependencies(tid) for tid in ids if tid != timeline.id):
+            raise ValueError("Remove the nested clips that use this timeline before deleting it.")
         self.checkpoint()
         del self.project.timelines[timeline.id]
         if timeline.id == self.project.active_timeline_id:
@@ -275,9 +277,31 @@ class Editor:
 
     # ---- clip ops --------------------------------------------------------
     def add_clip(self, asset_id: str, track_id: str | None = None, start: float | None = None) -> Clip | None:
+        asset = self.project.assets[asset_id]
+        duration = DEFAULT_IMAGE_CLIP if asset.kind == "image" else asset.duration
+        return self._place_clip(Clip(new_id(), asset.id, 0.0, 0.0, duration), asset, track_id, start)
+
+    def add_sequence(self, ref: str, track_id: str | None = None, start: float | None = None) -> Clip:
+        source = self.require_timeline(ref)
+        if not self.project.can_nest(source.id):
+            raise ValueError("This timeline would create a circular reference.")
+        if source.duration <= 0:
+            raise ValueError("Add clips to the source timeline before nesting it.")
+        clip = Clip(new_id(), "", 0.0, 0.0, source.duration, sequence_id=source.id)
+        return self._place_clip(clip, self.project.asset_for_clip(clip), track_id, start,
+                                overlay=start is not None and track_id is None)
+
+    def _place_clip(self, clip, asset, track_id, start, *, overlay=False) -> Clip:
         p = self.project
-        asset = p.assets[asset_id]
+        if start is not None:
+            start = max(start, 0.0)
         track = p.track(track_id) if track_id else None
+        self.checkpoint()
+        if overlay:
+            end = start + clip.duration
+            track = next(iter(p.video_tracks()), None)
+            if track is None or any(c.end > start and c.start < end for c in track.clips):
+                track = self.add_track("video", notify=False)
         if track is None or not track.accepts(asset):
             want = "video" if (asset.has_video or asset.kind == "image") else "audio"
             # media goes on the main (bottom-most) video track, like CapCut/Premiere
@@ -287,9 +311,7 @@ class Editor:
                 track = self.add_track(want, notify=False)
         if start is None:
             start = max((c.end for c in track.clips), default=0.0)
-        dur = DEFAULT_IMAGE_CLIP if asset.kind == "image" else asset.duration
-        self.checkpoint()
-        clip = Clip(new_id(), asset.id, max(start, 0.0), 0.0, dur)
+        clip.start = start
         track.clear_range(clip.start, clip.end)
         track.clips.append(clip)
         self.selection = {clip.id}
@@ -490,13 +512,15 @@ class Editor:
         if not self.clipboard:
             return 0
         t0 = min(d["start"] for _, d in self.clipboard)
+        if any(d.get("sequence_id") and not self.project.can_nest(d["sequence_id"]) for _, d in self.clipboard):
+            return 0
         self.checkpoint()
         new_sel = set()
         tracks = self.project.tracks
         for ti, d in self.clipboard:
             c = Clip(**{**d, "id": new_id(), "start": d["start"] - t0 + t, "transition": 0.0})
-            asset = self.project.assets.get(c.asset_id)
-            if asset is None and not c.is_text:
+            asset = self.project.asset_for_clip(c)
+            if asset is None and not c.is_generated:
                 continue
             tr = tracks[ti] if ti < len(tracks) and tracks[ti].accepts(asset) else None
             if tr is None:
@@ -530,9 +554,9 @@ class Editor:
         made = []
         for tr in p.video_tracks():
             for c in tr.clips:
-                a = p.assets.get(c.asset_id)
+                a = p.asset_for_clip(c)
                 keys = animate.keyframes_for(c, "volume")
-                if (a is not None and c.id in self.selection and a.has_audio and a.kind == "video"
+                if (a is not None and c.id in self.selection and a.has_audio and a.kind in ("video", "sequence")
                         and (any(value > 0 for _, value, _ in keys) if keys else c.volume > 0)):
                     made.append(c)
         if not made:
@@ -549,7 +573,7 @@ class Editor:
                 target = self.add_track("audio", notify=False)
             target.clips.append(Clip(new_id(), c.asset_id, c.start, c.in_point, c.out_point, c.volume,
                                      speed=c.speed, fade_in=c.fade_in, fade_out=c.fade_out,
-                                     speed_ramp=c.speed_ramp,
+                                     speed_ramp=c.speed_ramp, sequence_id=c.sequence_id,
                                      keyframes=animate.shift_keyframes({"volume": (c.keyframes or {}).get("volume")}, 0.0)))
             animate.clear_keyframes(c, "volume")
             c.volume = 0.0
@@ -570,9 +594,11 @@ class Editor:
         for k, v in props.items():
             setattr(c, k, v)
         if props.keys() & {"speed", "speed_ramp", "out_point", "in_point"}:
-            asset = self.project.assets.get(c.asset_id)
+            asset = self.project.asset_for_clip(c)
             if asset is not None:
-                c.out_point = min(c.out_point, asset.duration)
+                # Keep the placed span when the linked source has since become shorter.
+                if not c.sequence_id:
+                    c.out_point = min(c.out_point, asset.duration)
             tr.clear_range(c.start, c.end, keep_id=c.id)
         self.notify("props")
 

@@ -36,6 +36,8 @@ def needs_render_engine(project: Project) -> list[str]:
         why.add("frame-accurate cuts")
     for tr in project.tracks:
         for c in tr.clips:
+            if c.sequence_id:
+                why.add("nested sequences")
             if c.presentation_in or c.presentation_out:
                 why.add("frame-accurate cuts")
             if c.speed_ramp:

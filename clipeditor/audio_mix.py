@@ -45,16 +45,21 @@ def _add_segment(out, offset, samples, clip, track, start, sr, volume, keys):
     out[offset:offset + len(samples)] += samples * volume
 
 
-def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = False) -> np.ndarray:
+def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = False,
+        *, timeline=None, ancestors=()) -> np.ndarray:
     """wait=True (export) blocks until processed clip audio (audio_fx / speed) is ready."""
     sr = cache.sr
     out = np.zeros((n, 2), np.float32)
     t1 = t0 + n / sr
-    for track in project.tracks:
+    timeline = timeline or project.active_timeline
+    if timeline.id in ancestors:
+        return out
+    stack = (*ancestors, timeline.id)
+    for track in timeline.tracks:
         if track.muted:
             continue
         for clip in list(track.clips):
-            if clip.is_text or not clip.asset_id:
+            if clip.is_generated or not (clip.asset_id or clip.sequence_id):
                 continue
             if clip.end <= t0 or clip.start >= t1:
                 continue
@@ -62,6 +67,17 @@ def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = Fal
             keys = animate.keyframes_for(clip, "volume")
             vol = animate.volume_at(clip, max(t0, clip.start)) if not keys else clip.volume
             if not keys and vol <= 0:
+                continue
+            if clip.sequence_id:
+                source = project.timelines.get(clip.sequence_id)
+                if source is None or source.id in stack:
+                    continue
+                a, b = max(t0, clip.start), min(t1, clip.end)
+                offset = int(round((a - t0) * sr))
+                length = min(int(round((b - a) * sr)), n - offset)
+                if length > 0:
+                    samples = _sequence_audio(project, cache, source, clip, a, length, wait, stack)
+                    _add_segment(out, offset, samples, clip, track, a, sr, vol, keys)
                 continue
             processed = audio_fx.clip_audio(clip, asset, cache, wait=wait) if audio_fx.active(clip) else None
             if processed is not None:
@@ -111,4 +127,29 @@ def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = Fal
                 off = o0 + first
             _add_segment(out, off, seg, clip, track, a + (off - o0) / sr, sr, vol, keys)
     np.clip(out, -1.0, 1.0, out=out)
+    return out
+
+
+def _sequence_audio(project, cache, source, clip, start, count, wait, stack):
+    sr = cache.sr
+    if not clip.speed_ramp and abs(clip.speed - 1.0) < 1e-9:
+        return mix(project, cache, clip.source_time(start), count, wait, timeline=source, ancestors=stack)
+    offsets = np.arange(count, dtype=np.float64) / sr
+    if clip.speed_ramp:
+        ramp = curve(clip.speed_ramp)
+        source_times = ramp.source_samples(ramp.timeline_at(clip.in_point) + (start - clip.start) + offsets)
+    else:
+        source_times = clip.source_time(start) + offsets * clip.speed
+    sample_positions = source_times * sr
+    out = np.empty((count, 2), np.float32)
+    # Bound intermediate buffers even when several nested clips are sped up.
+    for index in range(0, count, 4096):
+        positions = sample_positions[index:index + 4096]
+        first = int(np.floor(positions[0]))
+        last = int(np.floor(positions[-1])) + 1
+        child = mix(project, cache, first / sr, last - first + 1, wait, timeline=source, ancestors=stack)
+        positions = positions - first
+        indices = positions.astype(np.int64)
+        fractions = (positions - indices).astype(np.float32)[:, None]
+        out[index:index + len(positions)] = child[indices] + (child[indices + 1] - child[indices]) * fractions
     return out

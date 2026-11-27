@@ -46,6 +46,7 @@ class TimelineCanvas(QWidget):
     scroll_changed = Signal()
     files_dropped = Signal(list, object, float)  # paths, track_id|None, time
     transition_added = Signal()
+    sequence_open_requested = Signal(str)
 
     def __init__(self, editor: Editor, loader):
         super().__init__()
@@ -271,13 +272,15 @@ class TimelineCanvas(QWidget):
         return btns
 
     def paint_clip(self, p: QPainter, tr: Track, c, r: QRectF):
-        asset = self.ed.project.assets.get(c.asset_id)
+        asset = self.ed.project.asset_for_clip(c)
         if asset is None and not c.is_generated:
             return
         if c.is_text:
             base = C_TEXTCLIP
         elif c.is_shape:
             base = QColor(176, 70, 140)
+        elif c.sequence_id:
+            base = QColor(113, 75, 164)
         else:
             base = C_AUDIO if tr.kind == "audio" else (C_IMAGE if asset.kind == "image" else C_VIDEO)
         p.fillRect(r, base.darker(130))
@@ -307,6 +310,9 @@ class TimelineCanvas(QWidget):
             f.setPointSizeF(8.5)
             f.setBold(False)
             p.setFont(f)
+        elif c.sequence_id:
+            p.setPen(QColor(231, 216, 247))
+            p.drawText(r.adjusted(6, 14, -4, 0), Qt.AlignmentFlag.AlignVCenter, "Nested sequence")
         elif tr.kind == "video":
             th = self.loader.thumb_at(asset.id, c.in_point)
             if th is not None:
@@ -335,7 +341,10 @@ class TimelineCanvas(QWidget):
         # title strip
         p.fillRect(QRectF(r.left(), r.top(), r.width(), 14), QColor(base.red(), base.green(), base.blue(), 230))
         p.setPen(QColor(240, 240, 245))
-        label = "Text" if c.is_text else "Sticker" if c.is_shape else asset.name
+        if c.sequence_id:
+            label = self.ed.project.timelines[c.sequence_id].name
+        else:
+            label = "Text" if c.is_text else "Sticker" if c.is_shape else asset.name
         badges = []
         if c.effects:
             badges.append("fx")
@@ -347,7 +356,7 @@ class TimelineCanvas(QWidget):
             badges.append("◐")
         if badges:
             label += "   " + " ".join(badges)
-        if not c.is_text and c.volume == 0 and asset.has_audio:
+        if asset is not None and c.volume == 0 and asset.has_audio:
             label += "  · muted"
         if c.speed_ramp:
             label += "  · Speed ramp"
@@ -523,8 +532,10 @@ class TimelineCanvas(QWidget):
             return
         d["moved"] = True
         start0, in0, out0 = d["orig"]
-        asset = self.ed.project.assets.get(c.asset_id)
+        asset = self.ed.project.asset_for_clip(c)
         max_src = asset.duration if asset is not None else 3600.0
+        if c.sequence_id:
+            max_src = max(max_src, out0)
         self.snap_x = None
         if d["mode"] == "move":
             ns = max(0.0, start0 + dt)
@@ -569,6 +580,14 @@ class TimelineCanvas(QWidget):
             self.ed.checkpoint(d["snap"])
             self.ed.notify("edit")
         self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        _, clip, mode = self.hit(event.position())
+        if event.button() == Qt.MouseButton.LeftButton and mode == "move" and clip is not None and clip.sequence_id:
+            self.drag = None
+            self.sequence_open_requested.emit(clip.sequence_id)
+        else:
+            super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, e):
         dy = e.angleDelta().y() or e.angleDelta().x()

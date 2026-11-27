@@ -121,30 +121,35 @@ class Compositor:
 
     # ---- render ----------------------------------------------------------
     def render(self, project: Project, t: float, w: int, h: int) -> QImage:
-        img = QImage(w, h, QImage.Format.Format_RGB32)
-        img.fill(QColor(0, 0, 0))
+        return self._render_timeline(project, project.active_timeline, t, w, h, ())
+
+    def _render_timeline(self, project, timeline, t, w, h, ancestors):
+        stack = (*ancestors, timeline.id)
+        fmt = QImage.Format.Format_ARGB32_Premultiplied if ancestors else QImage.Format.Format_RGB32
+        img = QImage(w, h, fmt)
+        img.fill(Qt.GlobalColor.transparent if ancestors else Qt.GlobalColor.black)
         p = QPainter(img)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        for track in reversed(project.video_tracks()):
-            if track.hidden:
+        for track in reversed(timeline.tracks):
+            if track.hidden or track.kind != "video":
                 continue
             for lane, clip in enumerate(track.clips_at(t)):
                 try:
-                    self._draw_clip(p, project, track, clip, lane, t, w, h)
+                    self._draw_clip(p, project, timeline.height, track, clip, lane, t, w, h, stack)
                 except Exception as e:  # noqa: BLE001 - one broken layer must not kill the frame
                     self.last_error = f"{type(e).__name__}: {e}"
         p.end()
         return img
 
-    def _draw_clip(self, p: QPainter, project: Project, track, clip, lane: int, t: float, w: int, h: int):
+    def _draw_clip(self, p, project, canvas_height, track, clip, lane, t, w, h, stack):
         props = animate.resolve(clip, t)
         alpha = props.opacity * video_alpha(track, clip, t)
         if alpha <= 0.001 or props.scale <= 0:
             return
         dx, dy = video_offset(track, clip, t, w, h)
         t_local = t - clip.presentation_start
-        k = h / max(project.height, 1)  # output px per project px
+        k = h / max(canvas_height, 1)  # output px per project px
 
         # ---- source pixels ---------------------------------------------
         if clip.is_text:
@@ -160,6 +165,23 @@ class Compositor:
                              lambda: shapes.render_shape(clip, max(int(h * props.scale), 2)))
             fw, fh = q.width(), q.height()
             pixel_fx = effects.active(clip) or masks.active(clip)
+        elif clip.sequence_id:
+            source = project.timelines.get(clip.sequence_id)
+            if source is None or source.id in stack:
+                return
+            st = clip.source_time(t)
+            if not 0 <= st < source.duration:
+                return
+            fps = max(source.fps, 1.0)
+            st = int(st * fps + 1e-8) / fps
+            scale = min(w / max(source.width, 1), h / max(source.height, 1)) * props.scale
+            fw, fh = source.width * scale, source.height * scale
+            if fw < 1 or fh < 1:
+                return
+            cap = min(1.0, self.MAX_DECODE * w / fw, self.MAX_DECODE * h / fh)
+            q = self._render_timeline(project, source, st, max(round(fw * cap), 1), max(round(fh * cap), 1), stack)
+            if self.needs_eq(clip) or effects.active(clip) or masks.active(clip):
+                q = self._pixels(qimage_to_rgba(q), clip, t_local, h)
         else:
             asset = project.assets.get(clip.asset_id)
             if asset is None or not (asset.has_video or asset.kind == "image"):

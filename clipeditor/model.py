@@ -100,6 +100,7 @@ class Clip:
     speed_ramp: tuple[tuple[float, float], ...] = ()  # (absolute source seconds, playback rate)
     presentation_in: float = 0.0  # elapsed effect time retained after a frame cut
     presentation_out: float = 0.0
+    sequence_id: str = ""  # linked source timeline, when this is a nested sequence
 
     def __post_init__(self):
         if self.speed_ramp:
@@ -281,8 +282,35 @@ class Project:
     def all_tracks(self) -> Iterator[Track]:
         return (track for timeline in self.timelines.values() for track in timeline.tracks)
 
+    def sequence_dependencies(self, timeline_id: str) -> set[str]:
+        return {c.sequence_id for track in self.timelines[timeline_id].tracks for c in track.clips if c.sequence_id}
+
+    def reachable_timelines(self, timeline_id: str) -> set[str]:
+        seen = set()
+        pending = [timeline_id]
+        while pending:
+            current = pending.pop()
+            if current not in seen and current in self.timelines:
+                seen.add(current)
+                pending.extend(self.sequence_dependencies(current))
+        return seen
+
+    def can_nest(self, sequence_id: str, *, in_timeline: str | None = None) -> bool:
+        return (sequence_id in self.timelines
+                and (in_timeline or self.active_timeline_id) not in self.reachable_timelines(sequence_id))
+
+    def asset_for_clip(self, clip: Clip) -> MediaAsset | None:
+        if clip.sequence_id:
+            source = self.timelines.get(clip.sequence_id)
+            if source is None:
+                return None
+            return MediaAsset(source.id, "", "sequence", source.duration, source.width, source.height,
+                              source.fps, has_video=True, has_audio=True)
+        return self.assets.get(clip.asset_id)
+
     def timeline_assets(self) -> Iterator[MediaAsset]:
-        ids = {clip.asset_id for track in self.tracks for clip in track.clips}
+        ids = {clip.asset_id for tid in self.reachable_timelines(self.active_timeline_id)
+               for track in self.timelines[tid].tracks for clip in track.clips}
         return (asset for asset in self.assets.values() if asset.id in ids)
 
     @property
@@ -366,6 +394,10 @@ class Project:
             p.active_timeline_id = d["active_timeline_id"]
         else:
             p.timelines[p.active_timeline_id] = Timeline.from_dict({**d, "id": p.active_timeline_id, "name": "Main"})
+        for timeline_id in p.timelines:
+            if any(not p.can_nest(dependency, in_timeline=timeline_id)
+                   for dependency in p.sequence_dependencies(timeline_id)):
+                raise ValueError("A nested sequence has a missing source or circular reference.")
         return p
 
     def save(self, path: str) -> None:

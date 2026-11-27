@@ -83,6 +83,8 @@ def build_command(project: Project, out_path: str, crf: int = 20, preset: str = 
     """
     if any(c.speed_ramp for track in project.tracks for c in track.clips):
         raise ValueError("Speed ramps require the render engine.")
+    if any(c.sequence_id for track in project.tracks for c in track.clips):
+        raise ValueError("Nested sequences require the render engine.")
     if project.active_timeline.frame_cuts or any(c.presentation_in or c.presentation_out
                                                 for track in project.tracks for c in track.clips):
         raise ValueError("Frame-accurate cuts require the render engine.")

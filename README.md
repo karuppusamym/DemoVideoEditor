@@ -63,6 +63,12 @@ Saving stores all timelines and the active selection. The desktop export uses th
 
 Existing single-timeline projects open as **Main**. Use this version or later to edit and save projects containing multiple timelines.
 
+### Nested sequences
+
+Use **Nest…** beside the timeline selector to place another timeline at the playhead. Double-click the nested clip to open its source, then use the timeline selector to return. Source edits update the nested clip's picture and sound while keeping its placed length. Trim or extend the clip to change the source range it plays. If the source becomes shorter, the unused portion is transparent and silent.
+
+You can split, move, resize, and retime a nested clip. Changing its speed also changes the pitch of its combined audio. Apply sound effects to the individual clips inside the source timeline.
+
 ## Editing and effects
 
 - Edit and arrange clips across multiple tracks; trim, split, move, duplicate, copy/paste, ripple-delete and detach audio.
@@ -119,4 +125,4 @@ ClipEditor source code is available under the [MIT License](LICENSE).
 
 ## Known gaps
 
-ClipEditor does not yet include nested sequences, voice cloning, mobile apps or translations. See [COMPARISON.md](COMPARISON.md) for a feature comparison and the current roadmap.
+ClipEditor does not yet include voice cloning, mobile apps or translations. See [COMPARISON.md](COMPARISON.md) for a feature comparison and the current roadmap.

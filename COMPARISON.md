@@ -9,7 +9,7 @@ The entries for other products come from their public feature lists, so check th
 |---|---|---|
 | Multi-track timeline, split/trim/ripple, snapping | ✅ | ✅ also range editing (I/O), frame delete/duplicate/freeze, copy/paste |
 | Magnetic timeline option | ✅ | 🟡 ripple delete/remove-range; no always-on magnetic mode yet |
-| Multiple timelines per project | ✅ | ✅ named timelines, shared media, and separate canvas settings |
+| Multiple timelines per project | ✅ | ✅ named timelines, shared media, separate canvas settings, and nested sequences |
 | Keyframes + curve editor | ✅ | ✅ graphical keyframes on position/scale/rotation/opacity/volume, 7 easings |
 | In / Out / Loop animations | ✅ | ✅ 16 in, 16 out, 10 loop |
 | Effects / filters / transitions | 100+ | ✅ 32 effects + 14 filter looks + 6 transitions (preview cards on your own frame) |
@@ -55,14 +55,12 @@ The entries for other products come from their public feature lists, so check th
 - The command palette, the safe-zone overlay and one-click silence removal are things most of these editors don't have.
 
 **Where it is clearly behind:**
-- Nested sequences are missing.
 - Voice cloning and stem separation are missing.
 - There are no mobile apps and the UI is English only.
 - Export of heavily effected timelines is slower than in GPU-native engines, because the render engine runs in Python on the CPU.
 
 ## Next milestones (in order)
-1. Nested sequences
-2. Stem separation (Demucs) and voice cloning (an open TTS such as XTTS/F5), as optional downloads
-3. A GPU/parallel render engine (multiprocess frame rendering, then an OpenGL compositor)
-4. A transition pack (wipes, zoom, blur, glitch: 30+) and an effect pack (to 100+)
-5. Translations, macOS/Linux packaging, installer
+1. Stem separation (Demucs) and voice cloning (an open TTS such as XTTS/F5), as optional downloads
+2. A GPU/parallel render engine (multiprocess frame rendering, then an OpenGL compositor)
+3. A transition pack (wipes, zoom, blur, glitch: 30+) and an effect pack (to 100+)
+4. Translations, macOS/Linux packaging, installer

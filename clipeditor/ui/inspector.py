@@ -537,6 +537,7 @@ class Inspector(QWidget):
         sec.full(b)
         lay.addWidget(sec)
         fx = Section("🎛  Voice & sound effects")
+        self.audio_effects_section = fx
         self.afx = QListWidget()
         self.afx.setFixedHeight(230)
         self.afx.itemChanged.connect(self._afx_toggled)
@@ -701,9 +702,13 @@ class Inspector(QWidget):
             return
         self.placeholder.hide()
         self.tabs.show()
-        a = self.ed.project.assets.get(c.asset_id)
+        a = self.ed.project.asset_for_clip(c)
         fps = self.ed.project.fps
-        self.title.setText("Text" if c.is_text else "Sticker / shape" if c.is_shape else a.name if a else "Clip")
+        source = self.ed.project.timelines.get(c.sequence_id)
+        if source is not None:
+            self.title.setText(source.name)
+        else:
+            self.title.setText("Text" if c.is_text else "Sticker / shape" if c.is_shape else a.name if a else "Clip")
         self.subtitle.setText(f"Starts {fmt_time(c.start, fps, True)}  ·  {c.duration:.2f}s long")
         visual = tr.kind == "video"
         has_audio = a is not None and a.has_audio
@@ -794,6 +799,7 @@ class Inspector(QWidget):
             self.trans_dur.setMaximum(max(int(max_duration(prev, c) * 100), 10))
             self.trans_dur.setValue(int(round((c.transition or DEFAULT_DURATION) * 100)))
         # audio fx
+        self.audio_effects_section.setVisible(not c.sequence_id)
         on = {f.get("type") for f in c.audio_fx}
         for i in range(self.afx.count()):
             it = self.afx.item(i)

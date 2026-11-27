@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self.player.tick.connect(self._on_tick)
         self.player.stopped.connect(lambda: self.btn_play.setText("▶"))
         self.timeline.canvas.seek.connect(self.seek)
+        self.timeline.canvas.sequence_open_requested.connect(self.ed.switch_timeline)
         self.timeline.canvas.files_dropped.connect(self._files_dropped_on_timeline)
         self.timeline.canvas.transition_added.connect(
             lambda: self.statusBar().showMessage("Transition added — pick a style and length on the right", 5000))
@@ -230,6 +231,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(label)
         layout.addWidget(self.timeline_choice)
         layout.addWidget(self._tbtn("New…", "Create a timeline in this project", self._create_timeline))
+        layout.addWidget(self._tbtn("Nest…", "Insert a linked timeline at the playhead", self._insert_sequence))
         options = QToolButton()
         options.setText("Manage")
         options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -262,6 +264,19 @@ class MainWindow(QMainWindow):
                 self.ed.create_timeline(name, duplicate)
             except ValueError as error:
                 QMessageBox.warning(self, title, str(error))
+
+    def _insert_sequence(self):
+        project = self.ed.project
+        sources = [t for t in project.timelines.values() if t.duration > 0 and project.can_nest(t.id)]
+        if not sources:
+            self.status("Create another timeline with clips before nesting it.")
+            return
+        name, accepted = QInputDialog.getItem(self, "Nest timeline", "Source timeline", [t.name for t in sources], 0, False)
+        if accepted:
+            try:
+                self.ed.add_sequence(name, start=self.ed.frame_start_at(self.playhead))
+            except ValueError as error:
+                QMessageBox.warning(self, "Nest timeline", str(error))
 
     def _rename_timeline(self):
         timeline = self.ed.project.active_timeline
@@ -987,7 +1002,7 @@ class MainWindow(QMainWindow):
             self.status("AI noise removal on — processing in the background")
             return
         # video jobs on the selected clip -> new file -> swap
-        clips = [c for c in self.ed.selected_clips() if not c.is_generated]
+        clips = [c for c in self.ed.selected_clips() if c.asset_id and not c.sequence_id]
         if len(clips) != 1:
             self.status("Select one video clip on the timeline first.")
             return

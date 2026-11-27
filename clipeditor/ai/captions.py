@@ -74,10 +74,8 @@ def timeline_audio(project, cache, sr: int = SR, chunk_s: float = 10.0) -> np.nd
     Loads any audio asset that is used on the timeline but not yet in `cache`."""
     from ..audio_mix import mix
 
-    used = {c.asset_id for t in project.tracks for c in t.clips if c.asset_id}
-    for aid in used:
-        asset = project.assets.get(aid)
-        if asset is not None and asset.has_audio and cache.get(aid) is None:
+    for asset in project.timeline_assets():
+        if asset.has_audio and cache.get(asset.id) is None:
             cache.load(asset)
     csr = cache.sr
     total = int(round(project.duration * csr))
