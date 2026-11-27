@@ -39,14 +39,33 @@ def listed() -> frozenset:
 
 @functools.lru_cache(maxsize=None)
 def works(encoder: str) -> bool:
-    """Listed is not enough for GPU encoders: try encoding a few tiny frames."""
+    """Listed is not enough for GPU encoders (driver, session limits): run a realistic test.
+
+    Pipes 2 s of changing raw BGRA frames in, exactly like the render-engine export does. Some
+    Intel QSV drivers pass a tiny lavfi test but fail on piped frames, so a short test is not enough."""
     if encoder not in listed():
         return False
+    w, h, n = 320, 180, 60
+    extra = {"qsv": ["-global_quality", "22", "-look_ahead", "0", "-bf", "0", "-pix_fmt", "nv12"],
+             "nvenc": ["-cq", "22", "-pix_fmt", "yuv420p"],
+             "amf": ["-pix_fmt", "yuv420p"]}.get(encoder.rsplit("_", 1)[-1], [])
     try:
-        r = subprocess.run([_ffmpeg(), "-hide_banner", "-v", "error", "-f", "lavfi", "-i",
-                            "color=black:s=256x144:r=30:d=0.2", "-c:v", encoder, "-f", "null", "-"],
-                           capture_output=True, timeout=20, creationflags=_NOWIN)
-        return r.returncode == 0
+        import numpy as np
+
+        frames = bytearray()
+        y = np.arange(h, dtype=np.uint16)[:, None]
+        x = np.arange(w, dtype=np.uint16)[None, :]
+        for i in range(n):
+            f = np.empty((h, w, 4), np.uint8)
+            f[..., 0] = (x + i * 4) % 256
+            f[..., 1] = (y * 2 + i * 3) % 256
+            f[..., 2] = ((x + y) // 2 + i) % 256
+            f[..., 3] = 255
+            frames += f.tobytes()
+        r = subprocess.run([_ffmpeg(), "-hide_banner", "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
+                            "-s", f"{w}x{h}", "-r", "30", "-i", "-", "-c:v", encoder, *extra, "-f", "null", "-"],
+                           input=bytes(frames), capture_output=True, timeout=40, creationflags=_NOWIN)
+        return r.returncode == 0 and b"Invalid" not in r.stderr and b"failed" not in r.stderr
     except Exception:  # noqa: BLE001
         return False
 
@@ -70,7 +89,8 @@ def codec_args(codec: str = "h264", gpu: bool = False, crf: int = 20, preset: st
             args = ["-c:v", enc, "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
             pix = "p010le" if ten_bit else "yuv420p"
         elif enc.endswith("_qsv"):
-            args = ["-c:v", enc, "-global_quality", str(crf), "-look_ahead", "0"]
+            # -bf 0: QSV rejects B-frames ("Invalid FrameType:0") with piped raw frames on some Intel drivers
+            args = ["-c:v", enc, "-global_quality", str(crf), "-look_ahead", "0", "-bf", "0"]
             pix = "p010le" if ten_bit else "nv12"
         else:  # amf
             args = ["-c:v", enc, "-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]

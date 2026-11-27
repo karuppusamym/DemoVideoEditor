@@ -10,3 +10,4 @@ __pycache__/
 /clipeditor/assets/sfx/
 /dist/
 *.ffgraph
+/clipeditor/assets/luts/

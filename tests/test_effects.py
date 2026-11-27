@@ -22,9 +22,11 @@ def clip_with(effects=(), chroma=None, masks=()):
 
 
 def test_registry_shape():
-    assert len(E.REGISTRY) >= 40
+    assert len(E.REGISTRY) >= 104
     cats = E.categories()
-    assert set(cats) >= {"Filters", "Blur & Sharp", "Stylize", "Retro & Glitch", "Motion"}
+    assert set(cats) >= {"Filters", "Light & Colour", "Blur & Sharp", "Stylize", "Retro & Glitch", "Motion"}
+    assert set(cats) == set(E.CATEGORY_ORDER), "every category is listed in CATEGORY_ORDER"
+    assert all(len(cats[c]) >= 6 for c in E.CATEGORY_ORDER)
     assert sum(len(v) for v in cats.values()) == len(E.REGISTRY)
     for name, spec in E.REGISTRY.items():
         assert {"label", "category", "params"} <= set(spec)
@@ -61,13 +63,67 @@ def test_effects_change_pixels():
     assert unchanged == []
 
 
-@pytest.mark.parametrize("name", ["grain", "noise", "glitch", "vhs", "old_film", "shake",
-                                  "zoom_pulse", "strobe", "heartbeat", "wobble", "kaleidoscope"])
-def test_time_effects_deterministic(name):
+@pytest.mark.parametrize("name", list(E.REGISTRY))
+def test_effects_deterministic(name):
     img = frame(3)
     a = E.run_effect(name, img, None, 1.2345, 360)
     b = E.run_effect(name, img.copy(), None, 1.2345, 360)
     assert np.array_equal(a, b)
+
+
+ANIMATED = ["grain", "noise", "glitch", "vhs", "old_film", "shake", "zoom_pulse", "strobe", "heartbeat",
+            "wobble", "light_leak", "hue_rotate", "bokeh", "defocus_pulse", "ripple", "wave", "datamosh",
+            "glitch_bars", "bad_tv", "film_scratch", "film_burn", "sway", "earthquake", "ken_burns",
+            "rotate_wobble", "flash_pulse", "beat_bounce", "echo_trail", "spin"]
+
+
+@pytest.mark.parametrize("name", ANIMATED)
+def test_animated_effects_change_over_time(name):
+    img = frame(8)
+    a = E.run_effect(name, img, None, 0.4, 360)
+    b = E.run_effect(name, img, None, 0.93, 360)
+    assert not np.array_equal(a, b)
+
+
+def _flat(rgb, h=60, w=80):
+    img = np.empty((h, w, 4), np.uint8)
+    img[..., :3] = rgb
+    img[..., 3] = 255
+    return img
+
+
+def test_colour_pop_keeps_only_target_hue():
+    img = _flat((200, 30, 30))
+    img[:, 40:, :3] = (30, 60, 200)
+    out = E.run_effect("colour_pop", img, {"hue": 0.0}, 0.0, 60).astype(int)
+    assert out[10, 10, 0] - out[10, 10, 2] > 100  # red kept
+    assert np.ptp(out[10, 60, :3]) <= 3  # blue turned grey
+
+
+def test_letterbox_and_polaroid_frame():
+    img = _flat((120, 160, 200), 90, 160)
+    out = E.run_effect("letterbox", img, None, 0.0, 90)
+    assert out[2, 80, :3].max() == 0 and out[45, 80, :3].tolist() == [120, 160, 200]
+    pol = E.run_effect("polaroid_frame", img, None, 0.0, 90)
+    assert pol[2, 80, :3].min() > 230 and pol[88, 80, :3].min() > 230  # white border
+    assert abs(int(pol[30, 80, 2]) - 198) < 12  # photo inside
+
+
+def test_channel_swap_and_hue_rotate():
+    img = _flat((200, 50, 10))
+    out = E.run_effect("channel_swap", img, {"mode": 2}, 0.0, 60)
+    assert out[0, 0, :3].tolist() == [10, 50, 200]
+    a = E.run_effect("hue_rotate", img, {"degrees": 0.0, "speed": 0.0}, 0.0, 60)
+    assert np.abs(a.astype(int) - img.astype(int)).max() <= 1
+
+
+def test_geometric_effects_keep_centre():
+    img = frame(9, 91, 161)
+    img[..., 3] = 255
+    for name in ("fisheye", "bulge", "pinch", "swirl"):
+        out = E.run_effect(name, img, None, 0.0, 91)
+        assert np.abs(out[45, 80].astype(int) - img[45, 80].astype(int)).max() <= 1, name
+        assert not np.array_equal(out, img), name
 
 
 def test_disabled_and_unknown_effects_skipped():

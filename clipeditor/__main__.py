@@ -63,6 +63,12 @@ def main(argv=None):
     if media:
         w.import_paths(media)
     w.show()
+    try:  # UI language (saved choice, else English)
+        from . import i18n
+
+        i18n.install(app, w)
+    except Exception as e:  # noqa: BLE001 - never block startup on translations
+        print(f"Translations unavailable: {e}", file=sys.stderr)
     if not projects and not media:
         from PySide6.QtCore import QTimer
 
@@ -71,4 +77,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()  # parallel export workers in frozen builds
     sys.exit(main())

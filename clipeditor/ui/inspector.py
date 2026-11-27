@@ -179,7 +179,7 @@ class Inspector(QWidget):
         self.loading = True
         self._snap = None
         self.rows: list[Row] = []
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(250)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
         self.title = QLabel()
@@ -205,6 +205,7 @@ class Inspector(QWidget):
         self._build_shape()
         self._build_video()
         self._build_adjust()
+        self._build_grade()
         self._build_mask()
         self._build_anim()
         self.tab_keys, key_layout = _page()
@@ -351,6 +352,138 @@ class Inspector(QWidget):
         lay.addWidget(blend)
         lay.addStretch(1)
         self.tab_video = page
+
+    def _build_grade(self):
+        """Pro colour: basic correction, lift/gamma/gain wheels, LUTs, HSL, curve presets."""
+        page, lay = _page()
+        try:
+            from .. import grade as G
+        except Exception:  # noqa: BLE001
+            G = None
+
+        def gget(key, default):
+            return lambda c: float((c.grade or {}).get(key, default))
+
+        def gset(key):
+            def f(c, v):
+                c.grade = {**(c.grade or {}), key: v}
+            return f
+
+        basic = Section("☀  Correction")
+        params = getattr(G, "BASIC_PARAMS", None) or {
+            "exposure": {"label": "Exposure", "min": -3, "max": 3, "default": 0},
+            "temperature": {"label": "Temperature", "min": -1, "max": 1, "default": 0},
+            "tint": {"label": "Tint", "min": -1, "max": 1, "default": 0},
+            "highlights": {"label": "Highlights", "min": -1, "max": 1, "default": 0},
+            "shadows": {"label": "Shadows", "min": -1, "max": 1, "default": 0},
+            "vibrance": {"label": "Vibrance", "min": -1, "max": 1, "default": 0}}
+        for key, spec in params.items():
+            lo, hi, d = float(spec.get("min", -1)), float(spec.get("max", 1)), float(spec.get("default", 0))
+            basic.add(spec.get("label", key), self.row(f"g_{key}", lo, hi, d, fmt=lambda v: f"{v:+.2f}",
+                                                       getter=gget(key, d), setter=gset(key)))
+        lay.addWidget(basic)
+
+        wheels = Section("◎  Colour wheels (lift · gamma · gain)")
+        for wheel in getattr(G, "WHEEL_KEYS", ("lift", "gamma", "gain")):
+            for i, ch in enumerate("RGB"):
+                def wg(c, wheel=wheel, i=i):
+                    return float(((c.grade or {}).get(wheel) or [0, 0, 0])[i])
+
+                def ws(c, v, wheel=wheel, i=i):
+                    cur = list((c.grade or {}).get(wheel) or [0.0, 0.0, 0.0])
+                    cur[i] = v
+                    c.grade = {**(c.grade or {}), wheel: cur}
+                wheels.add(f"{wheel.title()} {ch}", self.row(f"w_{wheel}{ch}", -0.5, 0.5, 0.0,
+                                                              fmt=lambda v: f"{v:+.2f}", getter=wg, setter=ws))
+        lay.addWidget(wheels)
+
+        lut = Section("🎞  LUT (look-up table)")
+        self.lut_combo = QComboBox()
+        self.lut_combo.addItem("None", "")
+        try:
+            if G is not None and hasattr(G, "ensure_builtin_luts"):
+                G.ensure_builtin_luts()
+            labels = getattr(G, "BUILTIN_LUT_LABELS", {}) or {}
+            for name, path in (getattr(G, "BUILTIN_LUTS", {}) or {}).items():
+                self.lut_combo.addItem(labels.get(name, name.replace("_", " ").title()), path)
+        except Exception:  # noqa: BLE001
+            pass
+        self.lut_combo.addItem("Import .cube file…", "__import__")
+        self.lut_combo.activated.connect(self._pick_lut)
+        lut.add("LUT", self.lut_combo)
+        lut.add("Strength", self.row("g_lut_mix", 0, 1, 1.0, getter=gget("lut_mix", 1.0), setter=gset("lut_mix")))
+        lay.addWidget(lut)
+
+        hsl = Section("🌈  HSL (per colour)")
+        self.hsl_band = QComboBox()
+        for b in getattr(G, "HSL_BANDS", ("red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta")):
+            self.hsl_band.addItem(b.title(), b)
+        self.hsl_band.currentIndexChanged.connect(lambda _i: self.refresh())
+        hsl.add("Colour", self.hsl_band)
+
+        def hg(k):
+            return lambda c: float((((c.grade or {}).get("hsl") or {}).get(self.hsl_band.currentData()) or {}).get(k, 0))
+
+        def hs(k):
+            def f(c, v):
+                g = dict(c.grade or {})
+                bands = dict(g.get("hsl") or {})
+                band = dict(bands.get(self.hsl_band.currentData()) or {})
+                band[k] = v
+                bands[self.hsl_band.currentData()] = band
+                g["hsl"] = bands
+                c.grade = g
+            return f
+        hsl.add("Hue", self.row("hsl_h", -60, 60, 0, scale=1, fmt=lambda v: f"{v:+.0f}°", getter=hg("h"), setter=hs("h")))
+        hsl.add("Saturation", self.row("hsl_s", -1, 1, 0, fmt=lambda v: f"{v:+.2f}", getter=hg("s"), setter=hs("s")))
+        hsl.add("Lightness", self.row("hsl_l", -1, 1, 0, fmt=lambda v: f"{v:+.2f}", getter=hg("l"), setter=hs("l")))
+        lay.addWidget(hsl)
+
+        curves = Section("〰  Curves")
+        self.curve_combo = QComboBox()
+        presets = {"Linear": None,
+                   "Soft contrast (S)": [[0, 0], [0.25, 0.2], [0.75, 0.8], [1, 1]],
+                   "Strong contrast": [[0, 0], [0.25, 0.14], [0.75, 0.88], [1, 1]],
+                   "Faded film": [[0, 0.08], [0.5, 0.52], [1, 0.94]],
+                   "Brighten mids": [[0, 0], [0.5, 0.6], [1, 1]],
+                   "Darken mids": [[0, 0], [0.5, 0.42], [1, 1]],
+                   "Crushed blacks": [[0, 0], [0.12, 0.0], [1, 1]]}
+        for name, pts in presets.items():
+            self.curve_combo.addItem(name, pts)
+
+        def set_curve(_i):
+            pts = self.curve_combo.currentData()
+
+            def f(c):
+                g = dict(c.grade or {})
+                cur = dict(g.get("curves") or {})
+                if pts:
+                    cur["master"] = pts
+                else:
+                    cur.pop("master", None)
+                g["curves"] = cur
+                c.grade = g
+            self.mutate(f)
+        self.curve_combo.activated.connect(set_curve)
+        curves.add("Master curve", self.curve_combo)
+        reset = QPushButton("Reset all colour")
+        reset.clicked.connect(lambda: self.mutate(lambda c: setattr(c, "grade", {})))
+        curves.full(reset)
+        lay.addWidget(curves)
+        lay.addStretch(1)
+        self.tab_grade = page
+
+    def _pick_lut(self, _i):
+        data = self.lut_combo.currentData()
+        if data == "__import__":
+            from PySide6.QtWidgets import QFileDialog
+
+            path, _ = QFileDialog.getOpenFileName(self, "Import LUT", "", "3D LUT (*.cube)")
+            if not path:
+                return
+            data = path
+        self.mutate(lambda c: setattr(c, "grade", {**(c.grade or {}), "lut": data} if data
+                                      else {k: v for k, v in (c.grade or {}).items() if k != "lut"}))
 
     def _build_adjust(self):
         page, lay = _page()
@@ -596,7 +729,11 @@ class Inspector(QWidget):
         spec = effects.REGISTRY.get(c.effects[i]["type"], {})
         for r, (pname, p) in enumerate(spec.get("params", {}).items()):
             lo, hi = float(p.get("min", 0)), float(p.get("max", 1))
-            scale = 100 if hi - lo <= 10 else 1
+            # whole-number settings (mirror mode, kaleidoscope segments) step in 1s
+            integer = pname in ("mode", "segments", "sides", "points") or (
+                all(float(x).is_integer() for x in (lo, hi, p.get("default", 0))) and hi - lo >= 2)
+            scale = 1 if integer or hi - lo > 10 else 100
+            fmt = (lambda v: f"{v:.0f}") if integer else (lambda v: f"{v:.2f}")
 
             def g(cl, pname=pname, p=p, i=i):
                 return float(cl.effects[i].get("params", {}).get(pname, p.get("default", 0)))
@@ -604,7 +741,7 @@ class Inspector(QWidget):
             def s(cl, v, pname=pname, i=i):
                 cl.effects[i] = {**cl.effects[i], "params": {**cl.effects[i].get("params", {}), pname: v}}
             row = Row(self, f"fx{i}_{pname}", lo, hi, float(p.get("default", 0)), scale=scale,
-                      fmt=lambda v: f"{v:.2f}", getter=g, setter=s)
+                      fmt=fmt, getter=g, setter=s)
             row.load(c)
             self.fx_params_lay.addWidget(QLabel(p.get("label", pname)), r, 0)
             self.fx_params_lay.addWidget(row, r, 1)
@@ -719,7 +856,7 @@ class Inspector(QWidget):
         if c.is_shape:
             want.append((self.tab_shape, "Shape"))
         if visual:
-            want += [(self.tab_video, "Video"), (self.tab_adjust, "Adjust"), (self.tab_mask, "Mask & Key"),
+            want += [(self.tab_video, "Video"), (self.tab_adjust, "Adjust"), (self.tab_grade, "Colour"), (self.tab_mask, "Mask & Key"),
                      (self.tab_anim, "Animation")]
         if visual or has_audio:
             want.append((self.tab_keys, "Keyframes"))
@@ -734,6 +871,14 @@ class Inspector(QWidget):
             self.tabs.clear()
             for w, label in want:
                 self.tabs.addTab(w, label)
+            try:  # tabs are rebuilt on every selection: translate the new labels (originals kept for switching)
+                from .. import i18n
+
+                if i18n.current() != "en":
+                    for i, (_w, label) in enumerate(want):
+                        self.tabs.setTabText(i, i18n.tr(label))
+            except Exception:  # noqa: BLE001
+                pass
             if current is not None and self.tabs.indexOf(current) >= 0:
                 self.tabs.setCurrentWidget(current)
         for r in self.rows:

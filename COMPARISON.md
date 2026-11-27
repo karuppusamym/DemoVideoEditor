@@ -8,19 +8,19 @@ The entries for other products come from their public feature lists, so check th
 | Area | Concat | ClipEditor |
 |---|---|---|
 | Multi-track timeline, split/trim/ripple, snapping | ✅ | ✅ also range editing (I/O), frame delete/duplicate/freeze, copy/paste |
-| Magnetic timeline option | ✅ | 🟡 ripple delete/remove-range; no always-on magnetic mode yet |
+| Magnetic timeline option | ✅ | ✅ magnetic main track (no gaps, insert instead of overwrite), plus ripple/remove-range |
 | Multiple timelines per project | ✅ | ✅ named timelines, shared media, separate canvas settings, and nested sequences |
 | Keyframes + curve editor | ✅ | ✅ graphical keyframes on position/scale/rotation/opacity/volume, 7 easings |
 | In / Out / Loop animations | ✅ | ✅ 16 in, 16 out, 10 loop |
-| Effects / filters / transitions | 100+ | ✅ 32 effects + 14 filter looks + 6 transitions (preview cards on your own frame) |
+| Effects / filters / transitions | 100+ | ✅ 114 effects & filters (27 looks) + 40 transitions in 5 categories, previewed on your own frame |
 | Sound effects | 25 | ✅ 28, synthesised in-app (no licensing questions) |
 | Titles & shapes | ✅ | ✅ 10 text styles, 22 shapes, 24 colour emoji stickers, gradients/outline/shadow |
 | Blend modes, crop, flip | ✅ | ✅ 13 blend modes, crop, mirror/flip, rotate |
 | Masks + chroma key | ✅ | ✅ rect/ellipse/linear/mirror masks with feather + invert; green-screen key with spill |
 | Speed, ramps/curves, freeze, reverse | ✅ | ✅ constant speed (pitch-correct), three-point speed ramps, freeze, reverse, optical-flow slow-mo |
 | Auto captions (local) | ✅ | ✅ Whisper, any language, 2 styles |
-| Voice isolation | ✅ | 🟡 AI noise removal (RNNoise) + voice enhance; no stem separation yet |
-| Text-to-speech + voice cloning | ✅ | 🟡 TTS with Windows voices (Piper optional) · ❌ voice cloning |
+| Voice isolation | ✅ | ✅ isolate voice / remove vocals (Demucs when installed, built-in spectral split otherwise) + RNNoise cleanup |
+| Text-to-speech + voice cloning | ✅ | ✅ TTS (Windows voices, Piper optional) · 🟡 voice cloning via optional F5-TTS / XTTS / OpenVoice; offline "voice match" fallback is approximate |
 | Background removal | ✅ | ✅ rembg (people / general models), video + images |
 | Enhance / stabilise | ✅ | ✅ FFmpeg-based enhance/upscale 2x, stabilise · ❌ AI super-resolution |
 | Voiceover recording + voice effects | ✅ | ✅ record over playback; 20 voice/music effects (chipmunk, robot, telephone, 8D…) |
@@ -32,7 +32,7 @@ The entries for other products come from their public feature lists, so check th
 | **Social safe-zone overlay** | ❌ | ✅ |
 | **One-click silence removal** | ❌ | ✅ |
 | Platforms | macOS, Windows, Linux, Android, iOS | Windows tested; Python + Qt should run on macOS/Linux (untested) |
-| Languages | 27 | English only |
+| Languages | 27 | 14 (English, Hindi, Tamil, Telugu, Bengali, Spanish, French, German, Portuguese-BR, Russian, Indonesian, Arabic RTL, Japanese, Chinese) |
 | Licence | AGPL-3.0 | yours (all dependencies are LGPL/MIT/BSD/Apache) |
 
 ## Positioning against the wider market
@@ -46,8 +46,8 @@ The entries for other products come from their public feature lists, so check th
 | Local AI captions | ✅ | ✅ (cloud-assisted) | ✅ Studio | ✅ | 🟡 Kdenlive (Whisper) | ✅ (cloud) |
 | Chat-to-edit with an LLM | ✅ | ❌ | ❌ | 🟡 (preview features) | ❌ | ❌ |
 | Scriptable by AI agents (MCP) | ✅ | ❌ | 🟡 (scripting API) | 🟡 (UXP/ExtendScript) | 🟡 (MLT XML) | ❌ |
-| Pro colour, Fusion VFX, Fairlight audio | ❌ | ❌ | ✅ | ✅ | 🟡 | ❌ |
-| Performance on long 4K projects | 🟡 Python render engine | ✅ | ✅ GPU | ✅ GPU | ✅ | 🟡 |
+| Pro colour, Fusion VFX, Fairlight audio | 🟡 colour: wheels, curves, HSL, .cube LUTs | ❌ | ✅ | ✅ | 🟡 | ❌ |
+| Performance on long 4K projects | 🟡 parallel render engine (≈2.5x on 8 cores), proxies, GPU encode when the driver passes a real test | ✅ | ✅ GPU | ✅ GPU | ✅ | 🟡 |
 
 **Where ClipEditor is better today:**
 - There is no account, no watermark, no upload and no licence lock-in.
@@ -60,7 +60,7 @@ The entries for other products come from their public feature lists, so check th
 - Export of heavily effected timelines is slower than in GPU-native engines, because the render engine runs in Python on the CPU.
 
 ## Next milestones (in order)
-1. Stem separation (Demucs) and voice cloning (an open TTS such as XTTS/F5), as optional downloads
-2. A GPU/parallel render engine (multiprocess frame rendering, then an OpenGL compositor)
-3. A transition pack (wipes, zoom, blur, glitch: 30+) and an effect pack (to 100+)
-4. Translations, macOS/Linux packaging, installer
+1. GPU compositor (OpenGL) so heavily effected 4K exports run in real time
+2. Real voice cloning and Demucs bundled as one-click optional downloads inside the app
+3. macOS/Linux packaging and an installer; more UI languages
+4. Graphical per-channel curve editor (curve presets ship today)

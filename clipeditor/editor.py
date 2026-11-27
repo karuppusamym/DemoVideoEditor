@@ -29,6 +29,7 @@ class Editor:
     def notify(self, reason: str = "edit"):
         if reason in ("edit", "props", "undo", "redo", "load"):
             self._normalize_transitions()
+            self._apply_magnetic()
         for fn in list(self.listeners):
             fn(reason)
 
@@ -61,6 +62,52 @@ class Editor:
         self._prune_selection()
         self.dirty = True
         self.notify(reason)
+
+    # ---- magnetic main track ----------------------------------------------
+    def main_track(self):
+        vids = self.project.video_tracks()
+        return vids[-1] if vids else None
+
+    def is_magnetic(self, track=None) -> bool:
+        tl = self.project.active_timeline
+        return bool(getattr(tl, "magnetic", False)) and (track is None or track is self.main_track())
+
+    def _apply_magnetic(self):
+        """Magnetic timeline: the main (bottom) video track never has gaps; clips keep their order
+        and transitions keep their overlap."""
+        if not self.is_magnetic():
+            return
+        main = self.main_track()
+        t = 0.0
+        for c in main.sorted_clips():
+            c.start = max(t - c.transition, 0.0) if c.transition > 0 else t
+            t = c.end
+
+    def magnetic_insert_point(self, track, t: float) -> float:
+        """Where a clip dropped at t lands on a magnetic track: never inside another clip."""
+        for c in track.sorted_clips():
+            if c.start < t < c.end:
+                return c.end if t > (c.start + c.end) / 2 else c.start
+        return t
+
+    def set_magnetic(self, on: bool):
+        tl = self.project.active_timeline
+        if bool(getattr(tl, "magnetic", False)) == bool(on):
+            return
+        self.checkpoint()
+        tl.magnetic = bool(on)
+        self.notify("edit")
+
+    def _place(self, track, clip):
+        """Insert (magnetic main track) or overwrite (everything else)."""
+        if self.is_magnetic(track):
+            clip.start = self.magnetic_insert_point(track, clip.start)
+            for o in track.clips:
+                if o.start >= clip.start - 1e-9:
+                    o.start += clip.duration
+        else:
+            track.clear_range(clip.start, clip.end)
+        track.clips.append(clip)
 
     def _normalize_transitions(self):
         """Drop transitions whose clip no longer overlaps a neighbour (e.g. after a move)."""
@@ -312,8 +359,7 @@ class Editor:
         if start is None:
             start = max((c.end for c in track.clips), default=0.0)
         clip.start = start
-        track.clear_range(clip.start, clip.end)
-        track.clips.append(clip)
+        self._place(track, clip)
         self.selection = {clip.id}
         self.notify("edit")
         return clip
