@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QMimeData, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QFontComboBox, QFrame, QGridLayout,
-                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit,
+                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSlider, QSpinBox, QToolButton, QVBoxLayout,
                                QWidget)
 
@@ -56,8 +56,19 @@ class MediaBin(QWidget):
         m.addAction("Add to end of timeline", lambda: self.ed.add_clip(aid))
         m.addAction("Insert at playhead", lambda: self.add_at_playhead.emit(aid))
         m.addSeparator()
-        m.addAction("Remove from project", lambda: self.ed.remove_asset(aid))
+        m.addAction("Remove from project", lambda: self._remove_asset(aid))
         m.exec(self.list.mapToGlobal(pos))
+
+    def _remove_asset(self, aid):
+        project = self.ed.project
+        used_elsewhere = any(clip.asset_id == aid for timeline in project.timelines.values()
+                             if timeline.id != project.active_timeline_id
+                             for track in timeline.tracks for clip in track.clips)
+        if used_elsewhere and QMessageBox.question(
+                self, "Remove media", "This media is used in another timeline. Remove it from all timelines?",
+                defaultButton=QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self.ed.remove_asset(aid)
 
     def refresh(self):
         self.list.clear()

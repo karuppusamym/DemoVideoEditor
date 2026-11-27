@@ -20,8 +20,15 @@ def cli_export(argv):
     ap.add_argument("output")
     ap.add_argument("--crf", type=int, default=20)
     ap.add_argument("--preset", default="medium")
+    ap.add_argument("--timeline", help="timeline name or ID (defaults to the saved active timeline)")
     a = ap.parse_args(argv)
     proj = Project.load(a.project)
+    if a.timeline is not None:
+        timeline = proj.find_timeline(a.timeline)
+        if timeline is None:
+            ap.error(f"Timeline '{a.timeline}' was not found. Available: "
+                     + ", ".join(t.name for t in proj.timelines.values()))
+        proj.active_timeline_id = timeline.id
 
     def prog(p):
         print(f"\rExporting… {p * 100:5.1f}%", end="", flush=True)

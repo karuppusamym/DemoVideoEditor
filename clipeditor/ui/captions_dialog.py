@@ -81,7 +81,7 @@ def run_auto_captions(win):
     win.player.stop()
 
     # make sure every clip's audio is decoded before mixing
-    for a in ed.project.assets.values():
+    for a in ed.project.timeline_assets():
         if a.has_audio and win.audio.get(a.id) is None:
             win.audio.load(a)
     from ..model import Project
@@ -108,6 +108,9 @@ def run_auto_captions(win):
             return
         if not lines:
             QMessageBox.information(win, "Auto captions", "No speech was found in this video.")
+            return
+        if ed.project.active_timeline_id != snapshot.active_timeline_id:
+            QMessageBox.information(win, "Auto captions", "The active timeline changed. Run captions on that timeline again.")
             return
         n = captions.add_captions(ed, lines, style=style)
         win.statusBar().showMessage(

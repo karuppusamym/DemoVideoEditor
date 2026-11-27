@@ -49,6 +49,18 @@ Keep a project file and its media in the same folder tree to move them together.
 
 The editor also includes undo/redo, range editing, autosave and crash recovery, drag-and-drop import, proxy generation for high-resolution media, and a Ctrl+K command palette.
 
+## Multiple timelines
+
+Use **New** beside the timeline selector to start another edit in the same project. Use **Manage** to rename, duplicate, or delete the selected timeline. Timelines share imported media and keep their own clips, canvas size, and frame rate. For example, duplicate a landscape edit and set the copy to **9:16** for a vertical version.
+
+Saving stores all timelines and the active selection. The desktop export uses the active timeline. To export a named timeline from the command line, pass `--timeline` with its name or ID.
+
+```powershell
+.\run.bat export project.clipeditor.json vertical.mp4 --timeline "Vertical Cut"
+```
+
+Existing single-timeline projects open as **Main**. Use this version or later to edit and save projects containing multiple timelines.
+
 ## Editing and effects
 
 - Edit and arrange clips across multiple tracks; trim, split, move, duplicate, copy/paste, ripple-delete and detach audio.
@@ -80,6 +92,8 @@ Run the Model Context Protocol (MCP) server with:
 
 Configure your MCP client to launch that command from the repository directory. Project edits remain in memory until saved.
 
+Use `list_timelines` and `switch_timeline` to work across timelines. `export_video` accepts an optional timeline name or ID.
+
 ## Project layout
 
 ```text
@@ -103,4 +117,4 @@ ClipEditor source code is available under the [MIT License](LICENSE).
 
 ## Known gaps
 
-ClipEditor does not yet include multiple timelines per project, voice cloning, mobile apps or translations. See [COMPARISON.md](COMPARISON.md) for a feature comparison and the current roadmap.
+ClipEditor does not yet include nested sequences, voice cloning, mobile apps or translations. See [COMPARISON.md](COMPARISON.md) for a feature comparison and the current roadmap.

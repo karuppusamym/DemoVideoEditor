@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import uuid
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -209,29 +210,97 @@ class Track:
         self.clips = result
 
 
+def default_tracks() -> list[Track]:
+    return [Track(new_id(), kind, name) for kind, name in
+            (("video", "V2"), ("video", "V1"), ("audio", "A1"), ("audio", "A2"))]
+
+
 @dataclass
-class Project:
+class Timeline:
+    id: str
+    name: str
     width: int = 1920
     height: int = 1080
     fps: float = 30.0
-    sample_rate: int = 48000
-    assets: dict[str, MediaAsset] = field(default_factory=dict)
     tracks: list[Track] = field(default_factory=list)
-
-    @classmethod
-    def new(cls) -> "Project":
-        p = cls()
-        p.tracks = [
-            Track(new_id(), "video", "V2"),
-            Track(new_id(), "video", "V1"),
-            Track(new_id(), "audio", "A1"),
-            Track(new_id(), "audio", "A2"),
-        ]
-        return p
 
     @property
     def duration(self) -> float:
-        return max((c.end for t in self.tracks for c in t.clips), default=0.0)
+        return max((c.end for track in self.tracks for c in track.clips), default=0.0)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Timeline":
+        known = set(Clip.__dataclass_fields__)
+        tracks = [Track(**{k: v for k, v in track.items() if k != "clips"},
+                        clips=[Clip(**{k: v for k, v in clip.items() if k in known}) for clip in track["clips"]])
+                  for track in data["tracks"]]
+        return cls(data["id"], data["name"], data["width"], data["height"], data["fps"], tracks)
+
+
+class Project:
+    """Shared media and named timelines. Editing and rendering use the active timeline."""
+
+    def __init__(self, width=1920, height=1080, fps=30.0, sample_rate=48000, assets=None, tracks=None):
+        timeline = Timeline(new_id(), "Main", width, height, fps, [] if tracks is None else tracks)
+        self.timelines: dict[str, Timeline] = {timeline.id: timeline}
+        self.active_timeline_id = timeline.id
+        self.sample_rate = sample_rate
+        self.assets: dict[str, MediaAsset] = {} if assets is None else assets
+
+    @classmethod
+    def new(cls) -> "Project":
+        return cls(tracks=default_tracks())
+
+    @property
+    def active_timeline(self) -> Timeline:
+        return self.timelines[self.active_timeline_id]
+
+    def find_timeline(self, ref: str) -> Timeline | None:
+        return self.timelines.get(ref) or next(
+            (timeline for timeline in self.timelines.values() if timeline.name.casefold() == ref.casefold()), None)
+
+    def all_tracks(self) -> Iterator[Track]:
+        return (track for timeline in self.timelines.values() for track in timeline.tracks)
+
+    def timeline_assets(self) -> Iterator[MediaAsset]:
+        ids = {clip.asset_id for track in self.tracks for clip in track.clips}
+        return (asset for asset in self.assets.values() if asset.id in ids)
+
+    @property
+    def width(self) -> int:
+        return self.active_timeline.width
+
+    @width.setter
+    def width(self, value: int) -> None:
+        self.active_timeline.width = value
+
+    @property
+    def height(self) -> int:
+        return self.active_timeline.height
+
+    @height.setter
+    def height(self, value: int) -> None:
+        self.active_timeline.height = value
+
+    @property
+    def fps(self) -> float:
+        return self.active_timeline.fps
+
+    @fps.setter
+    def fps(self, value: float) -> None:
+        self.active_timeline.fps = value
+
+    @property
+    def tracks(self) -> list[Track]:
+        return self.active_timeline.tracks
+
+    @tracks.setter
+    def tracks(self, value: list[Track]) -> None:
+        self.active_timeline.tracks = value
+
+    @property
+    def duration(self) -> float:
+        return self.active_timeline.duration
 
     def video_tracks(self) -> list[Track]:
         return [t for t in self.tracks if t.kind == "video"]
@@ -251,31 +320,33 @@ class Project:
 
     # ---- serialization -------------------------------------------------
     def to_dict(self) -> dict:
+        timelines = {tid: asdict(timeline) for tid, timeline in self.timelines.items()}
+        active = timelines[self.active_timeline_id]
         return {
-            "version": 1,
-            "width": self.width,
-            "height": self.height,
-            "fps": self.fps,
+            "version": 2,
+            # Keep the active timeline readable by older single-timeline clients.
+            **{key: active[key] for key in ("width", "height", "fps", "tracks")},
             "sample_rate": self.sample_rate,
             "assets": [asdict(a) for a in self.assets.values()],
-            "tracks": [
-                {**{k: v for k, v in asdict(t).items() if k != "clips"},
-                 "clips": [asdict(c) for c in t.clips]}
-                for t in self.tracks
-            ],
+            "active_timeline_id": self.active_timeline_id,
+            "timelines": list(timelines.values()),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Project":
-        p = cls(d["width"], d["height"], d["fps"], d.get("sample_rate", 48000))
+        p = cls(sample_rate=d.get("sample_rate", 48000))
         akeys = set(MediaAsset.__dataclass_fields__)
         p.assets = {a["id"]: MediaAsset(**{k: v for k, v in a.items() if k in akeys}) for a in d["assets"]}
-        known = set(Clip.__dataclass_fields__)
-        p.tracks = [
-            Track(**{**{k: v for k, v in t.items() if k != "clips"},
-                     "clips": [Clip(**{k: v for k, v in c.items() if k in known}) for c in t["clips"]]})
-            for t in d["tracks"]
-        ]
+        if "timelines" in d:
+            timelines = [Timeline.from_dict(entry) for entry in d["timelines"]]
+            p.timelines = {timeline.id: timeline for timeline in timelines}
+            names = {timeline.name.casefold() for timeline in timelines if timeline.name.strip()}
+            if (len(p.timelines) != len(timelines) or len(names) != len(timelines)
+                    or d.get("active_timeline_id") not in p.timelines):
+                raise ValueError("The project has an invalid timeline list or active timeline.")
+            p.active_timeline_id = d["active_timeline_id"]
+        else:
+            p.timelines[p.active_timeline_id] = Timeline.from_dict({**d, "id": p.active_timeline_id, "name": "Main"})
         return p
 
     def save(self, path: str) -> None:

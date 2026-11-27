@@ -23,7 +23,8 @@ from .media import AudioCache
 
 INSTRUCTIONS = (
     "ClipEditor video editing tools. Start with open_project (or new_project + import_media), then "
-    "get_project_summary to see tracks and clip ids. Times are timeline seconds. Every edit is one undo "
+    "get_project_summary to see the active timeline, tracks and clip ids. Use list_timelines and "
+    "switch_timeline to work across edits. Times are timeline seconds. Every edit is one undo "
     "step (undo/redo tools). Call save_project to write changes; export_video renders an MP4."
 )
 

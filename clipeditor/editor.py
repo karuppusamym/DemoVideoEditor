@@ -1,12 +1,13 @@
 """Editing operations + undo/redo on top of the Project model."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
 
 from . import animate
 from .media import DEFAULT_IMAGE_CLIP, probe
-from .model import MIN_CLIP, Clip, MediaAsset, Project, Track, new_id
+from .model import MIN_CLIP, Clip, MediaAsset, Project, Timeline, Track, default_tracks, new_id
 from .retime import validate_points
 
 
@@ -43,17 +44,22 @@ class Editor:
         if not self._undo:
             return
         self._redo.append(self.project.to_dict())
-        self.project = Project.from_dict(self._undo.pop())
-        self._prune_selection()
-        self.notify("undo")
+        self._restore_history(self._undo.pop(), "undo")
 
     def redo(self):
         if not self._redo:
             return
         self._undo.append(self.project.to_dict())
-        self.project = Project.from_dict(self._redo.pop())
+        self._restore_history(self._redo.pop(), "redo")
+
+    def _restore_history(self, snapshot: dict, reason: str):
+        old_timeline = self.project.active_timeline_id
+        self.project = Project.from_dict(snapshot)
+        if self.project.active_timeline_id != old_timeline:
+            self._clear_timeline_context()
         self._prune_selection()
-        self.notify("redo")
+        self.dirty = True
+        self.notify(reason)
 
     def _normalize_transitions(self):
         """Drop transitions whose clip no longer overlaps a neighbour (e.g. after a move)."""
@@ -115,11 +121,16 @@ class Editor:
         ids = {c.id for t in self.project.tracks for c in t.clips}
         self.selection &= ids
 
+    def _clear_timeline_context(self):
+        self.selection.clear()
+        self.mark_in = self.mark_out = None
+
     # ---- project files ---------------------------------------------------
     def new_project(self):
         self.project = Project.new()
         self.path = None
-        self.selection.clear()
+        self._clear_timeline_context()
+        self.clipboard.clear()
         self._undo.clear()
         self._redo.clear()
         self.dirty = False
@@ -128,7 +139,8 @@ class Editor:
     def open(self, path: str):
         self.project = Project.load(path)
         self.path = path
-        self.selection.clear()
+        self._clear_timeline_context()
+        self.clipboard.clear()
         self._undo.clear()
         self._redo.clear()
         self.dirty = False
@@ -142,6 +154,75 @@ class Editor:
         self.path = destination
         self.dirty = False
         self.notify("save")
+
+    # ---- timelines -------------------------------------------------------
+    def default_timeline_name(self, duplicate: bool = False) -> str:
+        base = f"{self.project.active_timeline.name} copy" if duplicate else "Timeline"
+        if duplicate and self.project.find_timeline(base) is None:
+            return base
+        number = 2
+        while self.project.find_timeline(f"{base} {number}") is not None:
+            number += 1
+        return f"{base} {number}"
+
+    def _timeline_name(self, name: str, exclude_id: str = "") -> str:
+        name = name.strip()
+        if not name:
+            raise ValueError("Enter a timeline name.")
+        existing = self.project.find_timeline(name)
+        if existing is not None and existing.id != exclude_id:
+            raise ValueError("A timeline already uses that name.")
+        return name
+
+    def require_timeline(self, ref: str) -> Timeline:
+        timeline = self.project.find_timeline(ref)
+        if timeline is None:
+            raise ValueError(f"Timeline '{ref}' was not found.")
+        return timeline
+
+    def switch_timeline(self, ref: str) -> Timeline:
+        timeline = self.require_timeline(ref)
+        if timeline.id != self.project.active_timeline_id:
+            self.project.active_timeline_id = timeline.id
+            self._clear_timeline_context()
+            self.notify("timeline")
+        return timeline
+
+    def create_timeline(self, name: str | None = None, duplicate: bool = False) -> Timeline:
+        name = self._timeline_name(self.default_timeline_name(duplicate) if name is None else name)
+        active = self.project.active_timeline
+        tracks = deepcopy(active.tracks) if duplicate else default_tracks()
+        if duplicate:
+            for track in tracks:
+                track.id = new_id()
+                for clip in track.clips:
+                    clip.id = new_id()
+        timeline = Timeline(new_id(), name, active.width, active.height, active.fps, tracks)
+        self.checkpoint()
+        self.project.timelines[timeline.id] = timeline
+        return self.switch_timeline(timeline.id)
+
+    def rename_timeline(self, ref: str, name: str) -> Timeline:
+        timeline = self.require_timeline(ref)
+        name = self._timeline_name(name, timeline.id)
+        if timeline.name != name:
+            self.checkpoint()
+            timeline.name = name
+            self.notify("timeline")
+        return timeline
+
+    def delete_timeline(self, ref: str):
+        timeline = self.require_timeline(ref)
+        ids = list(self.project.timelines)
+        if len(ids) == 1:
+            raise ValueError("Keep at least one timeline in the project.")
+        self.checkpoint()
+        del self.project.timelines[timeline.id]
+        if timeline.id == self.project.active_timeline_id:
+            index = ids.index(timeline.id)
+            self.switch_timeline(ids[index - 1] if index else ids[1])
+        else:
+            self.notify("timeline")
 
     # ---- media -----------------------------------------------------------
     def import_file(self, path: str):
@@ -162,7 +243,7 @@ class Editor:
             name = asset.name.casefold()
             filenames[name] = filenames.get(name, 0) + 1
         clips = {}
-        for track in self.project.tracks:
+        for track in self.project.all_tracks():
             for clip in track.clips:
                 clips.setdefault(clip.asset_id, []).append(clip)
         replacements = {}
@@ -571,7 +652,7 @@ class Editor:
         if asset_id not in self.project.assets:
             return
         self.checkpoint()
-        for tr in self.project.tracks:
+        for tr in self.project.all_tracks():
             tr.clips = [c for c in tr.clips if c.asset_id != asset_id]
         del self.project.assets[asset_id]
         self._prune_selection()

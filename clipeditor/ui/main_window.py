@@ -7,7 +7,7 @@ import time
 
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPalette
-from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QSlider, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMenu,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QSlider, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QMenu,
                                QMessageBox, QProgressDialog, QPushButton, QSizePolicy, QSplitter,
                                QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
 
@@ -61,6 +61,8 @@ class MainWindow(QMainWindow):
         self.comp = Compositor(use_proxies=True)
         self.player = Player(lambda: self.ed.project, self.audio)
         self.playhead = 0.0
+        self._visible_timeline_id = None
+        self._timeline_playheads = {}
         self._render_pending = False
         self._aspect_locked = False
         self.autosave_path = os.path.join(app_data_dir(), "autosave.clipeditor.json")
@@ -123,6 +125,7 @@ class MainWindow(QMainWindow):
         tl_lay = QVBoxLayout(tl_box)
         tl_lay.setContentsMargins(0, 0, 0, 0)
         tl_lay.setSpacing(0)
+        tl_lay.addWidget(self._build_timeline_selector())
         tl_lay.addWidget(self._build_timeline_bar())
         self.range_bar = self._build_range_bar()
         tl_lay.addWidget(self.range_bar)
@@ -211,6 +214,73 @@ class MainWindow(QMainWindow):
         exp.setToolTip("Save your finished video (Ctrl+E)")
         exp.clicked.connect(self.export_dialog)
         tb.addWidget(exp)
+
+    def _build_timeline_selector(self) -> QWidget:
+        bar = QWidget()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(6, 4, 6, 2)
+        label = QLabel("Timeline")
+        self.timeline_choice = QComboBox()
+        self.timeline_choice.setAccessibleName("Active timeline")
+        self.timeline_choice.setMinimumContentsLength(14)
+        self.timeline_choice.setMaximumWidth(320)
+        self.timeline_choice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.timeline_choice.activated.connect(lambda _index: self.ed.switch_timeline(self.timeline_choice.currentData()))
+        label.setBuddy(self.timeline_choice)
+        layout.addWidget(label)
+        layout.addWidget(self.timeline_choice)
+        layout.addWidget(self._tbtn("New…", "Create a timeline in this project", self._create_timeline))
+        options = QToolButton()
+        options.setText("Manage")
+        options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(options)
+        menu.addAction("Rename timeline…", self._rename_timeline)
+        menu.addAction("Duplicate timeline…", lambda: self._create_timeline(True))
+        self.delete_timeline_action = menu.addAction("Delete timeline…", self._delete_timeline)
+        options.setMenu(menu)
+        layout.addWidget(options)
+        layout.addStretch(1)
+        return bar
+
+    def _refresh_timeline_selector(self):
+        project = self.ed.project
+        entries = [(timeline.name, timeline.id) for timeline in project.timelines.values()]
+        current = [(self.timeline_choice.itemText(i), self.timeline_choice.itemData(i))
+                   for i in range(self.timeline_choice.count())]
+        if current != entries:
+            self.timeline_choice.clear()
+            for name, timeline_id in entries:
+                self.timeline_choice.addItem(name, timeline_id)
+        self.timeline_choice.setCurrentIndex(self.timeline_choice.findData(project.active_timeline_id))
+        self.delete_timeline_action.setEnabled(len(entries) > 1)
+
+    def _create_timeline(self, duplicate=False):
+        title = "Duplicate timeline" if duplicate else "New timeline"
+        name, accepted = QInputDialog.getText(self, title, "Name", text=self.ed.default_timeline_name(duplicate))
+        if accepted:
+            try:
+                self.ed.create_timeline(name, duplicate)
+            except ValueError as error:
+                QMessageBox.warning(self, title, str(error))
+
+    def _rename_timeline(self):
+        timeline = self.ed.project.active_timeline
+        name, accepted = QInputDialog.getText(self, "Rename timeline", "Name", text=timeline.name)
+        if accepted:
+            try:
+                self.ed.rename_timeline(timeline.id, name)
+            except ValueError as error:
+                QMessageBox.warning(self, "Rename timeline", str(error))
+
+    def _delete_timeline(self):
+        timeline = self.ed.project.active_timeline
+        answer = QMessageBox.question(self, "Delete timeline", f'Delete "{timeline.name}" and its edits?',
+                                      defaultButton=QMessageBox.StandardButton.No)
+        if answer == QMessageBox.StandardButton.Yes:
+            try:
+                self.ed.delete_timeline(timeline.id)
+            except ValueError as error:
+                QMessageBox.warning(self, "Delete timeline", str(error))
 
     def _build_timeline_bar(self) -> QWidget:
         bar = QWidget()
@@ -366,6 +436,27 @@ class MainWindow(QMainWindow):
 
     # ---- editor events ---------------------------------------------------
     def on_editor_change(self, reason: str):
+        project = self.ed.project
+        timeline_id = project.active_timeline_id
+        if reason == "load":
+            self._timeline_playheads.clear()
+            self._visible_timeline_id = None
+        switched = timeline_id != self._visible_timeline_id
+        if switched:
+            self.player.stop()
+            if self._visible_timeline_id is not None:
+                self._timeline_playheads[self._visible_timeline_id] = self.playhead
+            self._visible_timeline_id = timeline_id
+            self.playhead = min(self._timeline_playheads.get(timeline_id, 0.0), project.duration)
+            self.timeline.canvas.playhead = self.playhead
+            self.timeline.canvas.drag = None
+            self.timeline.canvas.snap_x = None
+            self.timeline.canvas.x_off = 0
+            if self.playhead > 0:
+                self.timeline.canvas.ensure_visible(self.playhead)
+            self._aspect_locked = reason != "load" or bool(self.ed.path)
+        if reason in ("load", "timeline", "undo", "redo"):
+            self._refresh_timeline_selector()
         self.update_range_bar()
         if reason == "marks":
             self.timeline.canvas.update()
@@ -374,8 +465,8 @@ class MainWindow(QMainWindow):
             for a in self.ed.project.assets.values():
                 self.loader.load(a)
             self.bin.refresh()
-        if reason in ("load", "undo", "redo", "settings"):
-            self.preview.aspect = self.ed.project.width / max(self.ed.project.height, 1)
+        if switched or reason in ("undo", "redo", "settings", "edit"):
+            self.preview.aspect = project.width / max(project.height, 1)
         if reason != "live":
             self.inspector.refresh()
         has_content = bool(self.ed.project.assets) or any(t.clips for t in self.ed.project.tracks)
@@ -385,6 +476,8 @@ class MainWindow(QMainWindow):
             self.timeline.canvas.playhead = self.playhead
         self.timeline.refresh()
         self.update_title()
+        if switched:
+            self.inspector.sync_curve_playhead(self.playhead)
         self.request_render()
 
     def _on_asset_data(self, _aid):
@@ -675,7 +768,7 @@ class MainWindow(QMainWindow):
                                           list(levels), 1, False)
         if not ok:
             return
-        missing = [a for a in self.ed.project.assets.values() if a.has_audio and self.audio.get(a.id) is None]
+        missing = [a for a in self.ed.project.timeline_assets() if a.has_audio and self.audio.get(a.id) is None]
         for a in missing:  # make sure audio is decoded
             self.audio.load(a)
         sil = find_silences(self.ed.project, self.audio, threshold_db=levels[choice])
@@ -799,11 +892,17 @@ class MainWindow(QMainWindow):
             path = self._rec.stop()
             self._rec = None
             self._rec_timer.stop()
+            if self._rec_timeline_id not in self.ed.project.timelines:
+                self.status(f"Voiceover saved to {path}", 10000)
+                return
             a = self.import_paths([path])
             if a:
                 a[0].origin = "voiceover"
-                self.ed.add_clip(a[0].id, None, self._rec_start)
-            self.status("Voiceover added ✓")
+                if self.ed.project.active_timeline_id == self._rec_timeline_id:
+                    self.ed.add_clip(a[0].id, None, self._rec_start)
+                    self.status("Voiceover added ✓")
+                else:
+                    self.status("Voiceover saved in the media bin. Open the recording's timeline to use it.")
             return
         try:
             self._rec = recorder.Recorder()
@@ -813,6 +912,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Can't record", str(e))
             return
         self._rec_start = self.playhead
+        self._rec_timeline_id = self.ed.project.active_timeline_id
         if not self.player.playing and self.ed.project.duration > 0:
             self.toggle_play()  # record while watching
         self._rec_timer = QTimer(self)
@@ -912,6 +1012,7 @@ class MainWindow(QMainWindow):
         self._run_job(label, fn, clip, asset, kwargs, key)
 
     def _run_job(self, label, fn, clip, asset, kwargs, key):
+        timeline_id = self.ed.project.active_timeline_id
         prog = QProgressDialog(f"{label}…", "Cancel", 0, 1000, self)
         prog.setWindowTitle("AI Magic")
         prog.setWindowModality(Qt.WindowModality.WindowModal)
@@ -939,9 +1040,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "AI Magic", f"Result could not be opened: {e}")
                 return
             new.origin = f"{key}:{asset.id}"
-            self.ed.swap_asset(clip.id, new, keep_timing=key not in ("smooth_slowmo",))
-            for a in [new]:
-                self.loader.load(a)
+            if timeline_id not in self.ed.project.timelines:
+                self.status(f"{label} done. Output saved to {new.path}", 10000)
+                return
+            if self.ed.project.find_clip(clip.id)[1] is None:
+                self.ed.add_asset(new)
+                self.status(f"{label} done. The result is in the media bin.")
+                return
+            self.ed.swap_asset(clip.id, new, keep_timing=key != "smooth_slowmo")
             self.status(f"{label} done ✓ — Ctrl+Z to go back to the original")
 
         sig.done.connect(finished)
@@ -1191,7 +1297,7 @@ class MainWindow(QMainWindow):
 
     # ---- autosave / recovery --------------------------------------------
     def autosave(self):
-        if self.ed.dirty and (self.ed.project.assets or self.ed.project.duration):
+        if self.ed.dirty:
             try:
                 self.ed.project.save(self.autosave_path)
                 self.statusBar().showMessage(f"Autosaved {time.strftime('%H:%M')}", 3000)
@@ -1215,8 +1321,8 @@ class MainWindow(QMainWindow):
                 self.ed.open(self.autosave_path)
                 self.ed.path = None
                 self.ed.dirty = True
-                self._aspect_locked = True
                 self.on_editor_change("load")
+                self._aspect_locked = True
                 QTimer.singleShot(50, self.zoom_fit)
             except Exception as e:  # noqa: BLE001
                 QMessageBox.warning(self, "Recovery failed", str(e))
@@ -1229,6 +1335,10 @@ class MainWindow(QMainWindow):
             return
         self.player.stop()
         base = os.path.splitext(os.path.splitext(os.path.basename(self.ed.path or "My video"))[0])[0]
+        if len(self.ed.project.timelines) > 1:
+            name = self.ed.project.active_timeline.name
+            safe_name = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in name[:64]).strip()
+            base += f" - {safe_name or 'Timeline'}"
         folder = self.settings.value("last_export_dir", "") or QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.MoviesLocation)
         dlg = ExportDialog(self, self.ed.project, os.path.join(folder, base + ".mp4"))

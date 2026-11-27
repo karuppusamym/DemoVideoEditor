@@ -58,7 +58,7 @@ def _timeline_audio(project: Project, sr: int = 48000, cancelled=None) -> np.nda
     from .media import AudioCache
 
     cache = AudioCache(sr)
-    for a in project.assets.values():
+    for a in project.timeline_assets():
         check_cancelled(cancelled)
         if a.has_audio:
             cache.load(a)

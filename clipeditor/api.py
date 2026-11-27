@@ -177,7 +177,16 @@ class EditorAPI:
         return self._invoke(fn) if self._invoke else fn()
 
     def _snapshot(self) -> Project:
-        return Project.from_dict(self._run(self.editor.project.to_dict))
+        return Project.from_dict(self._run(lambda: self.editor.project.to_dict()))
+
+    def _timeline_info(self, timeline) -> dict:
+        return {"id": timeline.id, "name": timeline.name, "duration": _r(timeline.duration),
+                "width": timeline.width, "height": timeline.height, "fps": timeline.fps,
+                "active": timeline.id == self.editor.project.active_timeline_id}
+
+    def _require_same_timeline(self, snapshot: Project):
+        if self.editor.project.active_timeline_id != snapshot.active_timeline_id:
+            raise ToolError("The active timeline changed while processing. Run the tool on that timeline again.")
 
     def _track(self, ref: str | None):
         if not ref:
@@ -243,7 +252,7 @@ class EditorAPI:
 
         # -- inspection --
         @T("get_project_summary",
-           "Current project: canvas size/fps, duration, every track with its clips (ids, names, timeline "
+           "Current project: active timeline name and ID, canvas size/fps, duration, tracks and clips (ids, names, timeline "
            "start/end in seconds, transitions), media count and undo state. Call this first, and again "
            "after edits whenever you need fresh clip ids.", _obj())
         def get_project_summary():
@@ -252,6 +261,8 @@ class EditorAPI:
                 g = _gcd(p.width, p.height)
                 return {
                     "path": ed.path, "unsaved_changes": ed.dirty,
+                    "active_timeline": self._timeline_info(p.active_timeline),
+                    "timeline_count": len(p.timelines),
                     "canvas": {"width": p.width, "height": p.height, "fps": p.fps,
                                "aspect": f"{p.width // g}:{p.height // g}"},
                     "duration": _r(p.duration),
@@ -283,6 +294,36 @@ class EditorAPI:
                                    "duration": None if a.kind == "image" else _r(a.duration),
                                    "width": a.width, "height": a.height, "has_audio": a.has_audio,
                                    "clips_on_timeline": used.get(a.id, 0)} for a in p.assets.values()]}
+            return self._run(f)
+
+        # -- timelines --
+        timeline_ref = {"type": "string", "description": "Timeline name or ID from list_timelines"}
+
+        @T("list_timelines", "List the timelines in the current project, including the active timeline.", _obj())
+        def list_timelines():
+            return self._run(lambda: {"timelines": [self._timeline_info(t) for t in ed.project.timelines.values()]})
+
+        @T("create_timeline", "Create and activate a named timeline. Set duplicate to copy the current edit.",
+           _obj({"name": {"type": "string"}, "duplicate": {"type": "boolean"}}))
+        def create_timeline(name=None, duplicate=False):
+            return self._run(lambda: {"ok": True, "timeline": self._timeline_info(ed.create_timeline(name, duplicate))})
+
+        @T("switch_timeline", "Make a timeline active for subsequent editing and export calls.",
+           _obj({"timeline": timeline_ref}, ("timeline",)))
+        def switch_timeline(timeline):
+            return self._run(lambda: {"ok": True, "timeline": self._timeline_info(ed.switch_timeline(timeline))})
+
+        @T("rename_timeline", "Rename a timeline in this project. Names must be unique.",
+           _obj({"timeline": timeline_ref, "name": {"type": "string"}}, ("timeline", "name")))
+        def rename_timeline(timeline, name):
+            return self._run(lambda: {"ok": True, "timeline": self._timeline_info(ed.rename_timeline(timeline, name))})
+
+        @T("delete_timeline", "Delete a timeline and its edits. This can be undone. One timeline must remain.",
+           _obj({"timeline": timeline_ref}, ("timeline",)))
+        def delete_timeline(timeline):
+            def f():
+                ed.delete_timeline(timeline)
+                return {"ok": True, "active_timeline": self._timeline_info(ed.project.active_timeline)}
             return self._run(f)
 
         # -- media --
@@ -557,6 +598,7 @@ class EditorAPI:
                 return {"ok": True, "removed": 0, "removed_seconds": 0.0, "duration": _r(snap.duration)}
 
             def f():
+                self._require_same_timeline(snap)
                 secs = ed.remove_ranges(ranges)
                 return {"ok": True, "removed": len(ranges), "removed_seconds": _r(secs),
                         "duration": _r(ed.project.duration)}
@@ -580,7 +622,11 @@ class EditorAPI:
             lines = C.split_for_screen(segs)
             if not lines:
                 return {"ok": True, "captions": 0, "note": "No speech found."}
-            n = self._run(lambda: C.add_captions(ed, lines, style))
+            def add_captions():
+                self._require_same_timeline(snap)
+                return C.add_captions(ed, lines, style)
+
+            n = self._run(add_captions)
             return {"ok": True, "captions": n, "preview": [t for _, _, t in lines[:3]]}
 
         # -- canvas / history / files --
@@ -629,18 +675,24 @@ class EditorAPI:
                 return {"ok": True, "path": full}
             return self._run(f)
 
-        @T("export_video", "Render the timeline to an MP4 file. Slow (runs FFmpeg). resolution sets the short "
+        @T("export_video", "Render the named or active timeline to an MP4 file. Slow (runs FFmpeg). resolution sets the short "
            "side of the output (source = canvas size).",
            _obj({"path": {"type": "string", "description": "output .mp4 path"},
                  "resolution": {"type": "string", "enum": list(RESOLUTIONS)},
+                 "timeline": timeline_ref,
                  "quality": {"type": "string", "enum": list(QUALITY)}}, ("path",)))
-        def export_video(path, resolution="source", quality="medium", progress=None):
-            from .export import export
+        def export_video(path, resolution="source", quality="medium", timeline=None, progress=None):
+            from .export_render import export_video as render_video
 
             out = self._paths(path)
             if not out.lower().endswith((".mp4", ".mov", ".mkv")):
                 out += ".mp4"
             snap = self._snapshot()
+            if timeline is not None:
+                selected = snap.find_timeline(timeline)
+                if selected is None:
+                    raise ToolError(f"Timeline '{timeline}' was not found.")
+                snap.active_timeline_id = selected.id
             if snap.duration <= 0:
                 raise ToolError("The timeline is empty.")
             short = RESOLUTIONS[resolution]
@@ -650,7 +702,7 @@ class EditorAPI:
                 w, h = int(round(snap.width * k)), int(round(snap.height * k))
             crf, preset = QUALITY[quality]
             os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-            export(snap, out, progress=progress, crf=crf, preset=preset, width=w, height=h)
+            render_video(snap, out, progress=progress, crf=crf, preset=preset, width=w, height=h)
             return {"ok": True, "path": out, "duration": _r(snap.duration),
                     "size_mb": round(os.path.getsize(out) / 1e6, 2)}
 
