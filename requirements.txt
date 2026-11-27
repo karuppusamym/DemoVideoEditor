@@ -1,0 +1,8 @@
+PySide6-Essentials>=6.6
+av>=12
+numpy>=1.26
+sounddevice>=0.4
+imageio-ffmpeg>=0.5
+faster-whisper>=1.0
+anthropic>=2.14
+mcp>=2.3

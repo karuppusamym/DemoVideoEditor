@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+*.pem
+*.key
+/samples/
+/p.out
+/clipeditor/assets/sfx/
+*.ffgraph
