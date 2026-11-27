@@ -303,7 +303,7 @@ class MainWindow(QMainWindow):
             lay.addWidget(b)
             return b
 
-        tool("✂ Split", "Split at playhead (S)", lambda: self.ed.split(self.playhead))
+        tool("✂ Split", "Split at playhead (S)", self.split_at_playhead)
         tool("🗑 Delete", "Delete clips or the marked range (Del)", self.smart_delete)
         tool("⧉ Duplicate", "Duplicate clips or range (Ctrl+D)", self.smart_duplicate)
         tool("❄ Freeze", "Freeze the frame under the playhead for 2 s (F)", lambda: self.freeze_frame(2.0))
@@ -318,7 +318,7 @@ class MainWindow(QMainWindow):
         fr.setText("🎞 Frame ▾")
         fr.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         fm = QMenu(fr)
-        fm.addAction("Remove this frame   (Alt+Del)", lambda: self.ed.remove_frame(self.playhead))
+        fm.addAction("Delete one frame (hard cut)   (Alt+Del)", self.remove_frame)
         fm.addAction("Duplicate this frame   (Alt+D)", self.duplicate_frame)
         fm.addAction("Freeze this frame for 2 s   (F)", lambda: self.freeze_frame(2.0))
         fm.addAction("Save this frame as picture…", self.save_frame_png)
@@ -376,7 +376,7 @@ class MainWindow(QMainWindow):
         self._act(e, "Undo", self.ed.undo, "Ctrl+Z")
         self._act(e, "Redo", self.ed.redo, "Ctrl+Y")
         e.addSeparator()
-        self._act(e, "Split at playhead", lambda: self.ed.split(self.playhead), "S")
+        self._act(e, "Split at playhead", self.split_at_playhead, "S")
         self._act(e, "Add text", lambda: self.add_text("Title"), "T")
         self._act(e, "Cut", self.cut, "Ctrl+X")
         self._act(e, "Copy", self.copy, "Ctrl+C")
@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         self._act(r, "Duplicate range", self.duplicate_range)
         self._act(r, "Play range", self.play_range, "Shift+Space")
         r.addSeparator()
-        self._act(r, "Remove frame at playhead", lambda: self.ed.remove_frame(self.playhead), "Alt+Delete")
+        self._act(r, "Delete one frame (hard cut)", self.remove_frame, "Alt+Delete")
         self._act(r, "Duplicate frame at playhead", self.duplicate_frame, "Alt+D")
         self._act(r, "Freeze frame (2 s)", lambda: self.freeze_frame(2.0), "F")
         self._act(r, "Save frame as picture…", self.save_frame_png)
@@ -508,7 +508,8 @@ class MainWindow(QMainWindow):
         self._render_pending = False
         w, h = self.preview.frame_size()
         try:
-            self.preview.set_image(self.comp.render(self.ed.project, self.playhead, w, h))
+            time = self.ed.frame_start_at(self.playhead) if self.playhead < self.ed.project.duration else self.playhead
+            self.preview.set_image(self.comp.render(self.ed.project, time, w, h))
         except Exception as e:  # noqa: BLE001 - never let a bad frame crash the editor
             self.statusBar().showMessage(f"Preview error: {e}", 5000)
 
@@ -706,6 +707,9 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Click a clip (or mark a range) first, then press Delete", 5000)
 
+    def split_at_playhead(self):
+        self.ed.split(self.ed.frame_start_at(self.playhead))
+
     def smart_duplicate(self):
         if self.ed.selection:
             self.ed.duplicate_selected()
@@ -717,6 +721,21 @@ class MainWindow(QMainWindow):
     def duplicate_frame(self):
         a = self.ed.snap_to_frame(self.playhead)
         self.ed.duplicate_range(a, a + self.ed.frame())
+
+    def remove_frame(self):
+        self.player.stop()
+        try:
+            time = self.ed.frame_start_at(self.playhead)
+            removed = self.ed.remove_frame(self.playhead)
+        except ValueError as error:
+            self.status(str(error), 7000)
+            return
+        if removed:
+            self.clear_marks()
+            self.seek(time)
+            self.status("Deleted one frame and closed the gap.")
+        else:
+            self.status("Move the playhead onto the frame you want to delete.")
 
     def _grab_frame(self, t: float):
         pr = self.ed.project

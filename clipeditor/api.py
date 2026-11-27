@@ -388,6 +388,15 @@ class EditorAPI:
                 return {"ok": True, "new_clips": [self._clip_info(c) for c in new]}
             return self._run(f)
 
+        @T("remove_frame", "Delete the single timeline frame containing t and close the gap across all tracks.",
+           _obj({"t": {"type": "number", "minimum": 0}}, ("t",)))
+        def remove_frame(t):
+            def f():
+                if not ed.remove_frame(t):
+                    raise ToolError("Move the playhead onto an existing timeline frame.")
+                return {"ok": True, "duration": _r(ed.project.duration)}
+            return self._run(f)
+
         @T("delete_clips", "Delete clips by id. ripple=true closes the gaps they leave on their tracks.",
            _obj({"clip_ids": {"type": "array", "items": {"type": "string"}},
                  "ripple": {"type": "boolean"}}, ("clip_ids",)))

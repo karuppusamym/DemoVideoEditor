@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, replace
+from math import floor, isfinite
 from pathlib import Path
 
 from . import animate
@@ -197,7 +198,8 @@ class Editor:
                 track.id = new_id()
                 for clip in track.clips:
                     clip.id = new_id()
-        timeline = Timeline(new_id(), name, active.width, active.height, active.fps, tracks)
+        timeline = Timeline(new_id(), name, active.width, active.height, active.fps, tracks,
+                            frame_cuts=duplicate and active.frame_cuts)
         self.checkpoint()
         self.project.timelines[timeline.id] = timeline
         return self.switch_timeline(timeline.id)
@@ -322,9 +324,11 @@ class Editor:
         """Split selected clips at t (or every clip under t if nothing is selected)."""
         p = self.project
         targets = []
+        frame = self.frame()
         for tr in p.tracks:
             for c in tr.clips:
-                if c.start + MIN_CLIP < t < c.end - MIN_CLIP and (not self.selection or c.id in self.selection):
+                if (t - c.start >= frame - 1e-9 and c.end - t >= frame - 1e-9
+                        and (not self.selection or c.id in self.selection)):
                     targets.append((tr, c))
         if not targets:
             return
@@ -344,6 +348,10 @@ class Editor:
     def snap_to_frame(self, t: float) -> float:
         f = self.frame()
         return round(t / f) * f
+
+    def frame_start_at(self, t: float) -> float:
+        fps = max(self.project.fps, 1.0)
+        return floor(t * fps + 1e-8) / fps
 
     def range(self) -> tuple[float, float] | None:
         if self.mark_in is None or self.mark_out is None:
@@ -420,10 +428,35 @@ class Editor:
         self.selection = {cp.id for _, cp in copies}
         self.notify("edit")
 
-    def remove_frame(self, t: float):
-        f = self.frame()
-        a = self.snap_to_frame(t)
-        self.remove_range(a, a + f)
+    def remove_frame(self, t: float) -> bool:
+        """Remove the timeline frame containing t and close the gap on every track."""
+        duration = self.project.duration
+        if not isfinite(t) or not 0 <= t < duration:
+            return False
+        start = self.frame_start_at(t)
+        end = min(self.frame_start_at(start + self.frame()), duration)
+        if end - start <= 1e-8:
+            return False
+
+        from .transitions import incoming
+
+        for track in self.project.tracks:
+            for clip in track.clips:
+                transition = incoming(track, clip)
+                if transition and start < clip.start + transition[1] - 1e-9 and end > clip.start + 1e-9:
+                    raise ValueError("Remove the transition first to delete a frame inside its overlap.")
+
+        self.checkpoint()
+        for track in self.project.tracks:
+            # A remaining frame can be shorter than the default clip limit at high FPS.
+            track.clear_range(start, end, minimum_duration=1e-8, preserve_presentation=True)
+            for clip in track.clips:
+                if clip.start >= end - 1e-9:
+                    clip.start = start + max(clip.start - end, 0.0)
+        self.project.active_timeline.frame_cuts = True
+        self._prune_selection()
+        self.notify("edit")
+        return True
 
     def insert_still(self, image_path: str, t: float, duration: float = 2.0, track_id: str | None = None):
         """Freeze frame: insert a still image at t, pushing everything after it right."""

@@ -83,6 +83,9 @@ def build_command(project: Project, out_path: str, crf: int = 20, preset: str = 
     """
     if any(c.speed_ramp for track in project.tracks for c in track.clips):
         raise ValueError("Speed ramps require the render engine.")
+    if project.active_timeline.frame_cuts or any(c.presentation_in or c.presentation_out
+                                                for track in project.tracks for c in track.clips):
+        raise ValueError("Frame-accurate cuts require the render engine.")
     W = width or project.width
     H = height or project.height
     W, H = W - W % 2, H - H % 2

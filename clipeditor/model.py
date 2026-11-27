@@ -98,6 +98,8 @@ class Clip:
     audio_fx: list = field(default_factory=list)  # [{"type": str, "params": {..}}] (clipeditor.audio_fx)
     shape: dict | None = None  # shape clip (asset_id ""), see clipeditor.shapes
     speed_ramp: tuple[tuple[float, float], ...] = ()  # (absolute source seconds, playback rate)
+    presentation_in: float = 0.0  # elapsed effect time retained after a frame cut
+    presentation_out: float = 0.0
 
     def __post_init__(self):
         if self.speed_ramp:
@@ -124,6 +126,14 @@ class Clip:
     def end(self) -> float:
         return self.start + self.duration
 
+    @property
+    def presentation_start(self) -> float:
+        return self.start - self.presentation_in
+
+    @property
+    def presentation_end(self) -> float:
+        return self.end + self.presentation_out
+
     def source_time(self, t: float) -> float:
         return self.source_after(self.in_point, t - self.start)
 
@@ -143,9 +153,9 @@ class Clip:
         """0..1 multiplier from fades at timeline time t."""
         g = 1.0
         if self.fade_in > 0:
-            g = min(g, max((t - self.start) / self.fade_in, 0.0))
+            g = min(g, max((t - self.presentation_start) / self.fade_in, 0.0))
         if self.fade_out > 0:
-            g = min(g, max((self.end - t) / self.fade_out, 0.0))
+            g = min(g, max((self.presentation_end - t) / self.fade_out, 0.0))
         return min(g, 1.0)
 
 
@@ -178,7 +188,8 @@ class Track:
             return asset.has_video or asset.kind == "image"
         return asset.has_audio
 
-    def clear_range(self, start: float, end: float, keep_id: str | None = None) -> None:
+    def clear_range(self, start: float, end: float, keep_id: str | None = None,
+                    minimum_duration: float = MIN_CLIP, preserve_presentation: bool = False) -> None:
         """Overwrite edit: trim/split/remove other clips overlapping [start, end).
 
         If `keep_id` has a transition, its overlap with the previous clip is allowed."""
@@ -194,18 +205,24 @@ class Track:
             if c.start < start:  # keep head
                 head = Clip(**asdict(c))
                 head.out_point = c.source_time(start)
-                head.fade_out = 0.0
-                if head.duration >= MIN_CLIP:
+                if preserve_presentation:
+                    head.presentation_out += c.end - start
+                else:
+                    head.fade_out = 0.0
+                if head.duration >= minimum_duration - 1e-9:
                     result.append(head)
             if c.end > end:  # keep tail
                 tail = Clip(**asdict(c))
                 tail.id = new_id() if c.start < start else c.id
                 tail.in_point = c.source_time(end)
                 tail.keyframes = shift_keyframes(c.keyframes, end - c.start)
-                tail.fade_in = 0.0
+                if preserve_presentation:
+                    tail.presentation_in += end - c.start
+                else:
+                    tail.fade_in = 0.0
                 tail.transition = 0.0
                 tail.start = end
-                if tail.duration >= MIN_CLIP:
+                if tail.duration >= minimum_duration - 1e-9:
                     result.append(tail)
         self.clips = result
 
@@ -223,6 +240,7 @@ class Timeline:
     height: int = 1080
     fps: float = 30.0
     tracks: list[Track] = field(default_factory=list)
+    frame_cuts: bool = False  # use the preview's frame selection for export
 
     @property
     def duration(self) -> float:
@@ -234,7 +252,8 @@ class Timeline:
         tracks = [Track(**{k: v for k, v in track.items() if k != "clips"},
                         clips=[Clip(**{k: v for k, v in clip.items() if k in known}) for clip in track["clips"]])
                   for track in data["tracks"]]
-        return cls(data["id"], data["name"], data["width"], data["height"], data["fps"], tracks)
+        return cls(data["id"], data["name"], data["width"], data["height"], data["fps"], tracks,
+                   data.get("frame_cuts", False))
 
 
 class Project:

@@ -18,16 +18,16 @@ def _fade_ramp(clip, a: float, length: int, sr: int, fi: float, fo: float) -> np
     """Per-sample gain for timeline times a + i/sr, or None if no fade touches the span.
 
     fi/fo are the effective fade lengths (clip fades combined with transition crossfades)."""
-    end = clip.end
+    start, end = clip.presentation_start, clip.presentation_end
     b = a + length / sr
-    need_in = fi > 0 and a < clip.start + fi
+    need_in = fi > 0 and a < start + fi
     need_out = fo > 0 and b > end - fo
     if not (need_in or need_out):
         return None
     tt = a + np.arange(length, dtype=np.float64) / sr
     g = np.ones(length, np.float64)
     if need_in:
-        np.minimum(g, (tt - clip.start) / fi, out=g)
+        np.minimum(g, (tt - start) / fi, out=g)
     if need_out:
         np.minimum(g, (end - tt) / fo, out=g)
     np.clip(g, 0.0, 1.0, out=g)

@@ -38,6 +38,8 @@ Open a saved project by passing its `.clipeditor.json` file. To export from the 
 2. Select the clip, move the playhead, and press **S** to split it. Select a segment and press **Delete** to remove it.
 3. Save your project with **Ctrl+S**, then use **Ctrl+E** to export an MP4.
 
+Select a clip and open **Speed** to choose **2×** or **3×**. **Delete** removes selected clips, and **Shift+Delete** removes a marked range and closes the gap. Use the left and right arrows to step one frame at a time. To remove exactly one frame from all tracks, use **Frame → Delete one frame (hard cut)** or **Alt+Delete**. The edit closes the gap without adding a fade. For a frame inside a transition overlap, remove the transition before making the frame cut.
+
 Keep a project file and its media in the same folder tree to move them together. If source files are elsewhere and have moved, use **File → Locate missing media** and select their new folder. ClipEditor matches files by name and checks they can cover the existing edits.
 
 ## Workspace

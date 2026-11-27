@@ -143,7 +143,7 @@ class Compositor:
         if alpha <= 0.001 or props.scale <= 0:
             return
         dx, dy = video_offset(track, clip, t, w, h)
-        t_local = t - clip.start
+        t_local = t - clip.presentation_start
         k = h / max(project.height, 1)  # output px per project px
 
         # ---- source pixels ---------------------------------------------

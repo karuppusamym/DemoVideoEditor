@@ -462,7 +462,8 @@ def resolve(clip, t: float) -> Props:
     r = value_at(clip, "rotation", tl)
     o = value_at(clip, "opacity", tl)
 
-    dur = max(clip.duration, 1e-6)
+    tl += clip.presentation_in
+    dur = max(clip.duration + clip.presentation_in + clip.presentation_out, 1e-6)
     layers = []
     if clip.anim_in and clip.anim_in_dur > 0:
         din = min(clip.anim_in_dur, dur)

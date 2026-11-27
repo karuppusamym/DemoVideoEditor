@@ -32,10 +32,16 @@ _NOWIN = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 def needs_render_engine(project: Project) -> list[str]:
     """Reasons the fast filter-graph exporter can't be used (empty list = graph is fine)."""
     why = set()
+    if project.active_timeline.frame_cuts:
+        why.add("frame-accurate cuts")
     for tr in project.tracks:
         for c in tr.clips:
+            if c.presentation_in or c.presentation_out:
+                why.add("frame-accurate cuts")
             if c.speed_ramp:
                 why.add("speed ramps")
+            elif abs(c.speed - 1.0) > 1e-6:
+                why.add("clip speed")
             if animate.active(c):
                 why.add("keyframes/animations")
             if effects.active(c):
