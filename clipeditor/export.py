@@ -59,15 +59,6 @@ def _fit_size(aw: int, ah: int, W: int, H: int, scale: float) -> tuple[int, int]
     return _even(aw * k), _even(ah * k)
 
 
-def _prepare_qt_fonts() -> None:
-    """The offscreen Qt platform (used for CLI export) finds no fonts on Windows unless
-    QT_QPA_FONTDIR points at them; harmless when a real QApplication already exists."""
-    if os.name == "nt" and not os.environ.get("QT_QPA_FONTDIR"):
-        fonts = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-        if os.path.isdir(fonts):
-            os.environ["QT_QPA_FONTDIR"] = fonts
-
-
 def _has_text(project: Project) -> bool:
     return any(c.is_text for t in project.video_tracks() if not t.hidden for c in t.clips)
 
@@ -149,7 +140,6 @@ def build_command(project: Project, out_path: str, crf: int = 20, preset: str = 
 
                 if workdir is None:
                     workdir = tempfile.mkdtemp(prefix="clipeditor_text_")
-                _prepare_qt_fonts()
                 ensure_qapp()
                 png = os.path.join(workdir, f"text_{idx}_{clip.id}.png")
                 if not render_text(clip, W, H, project.height).save(png, "PNG"):

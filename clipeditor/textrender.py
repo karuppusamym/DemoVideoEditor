@@ -6,8 +6,9 @@ so titles look identical in both.
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFontMetricsF, QGuiApplication, QImage, QPainter, QPainterPath, QPen
 
+from .fonts import interface_font, prepare_qt_fonts, title_font
 from .model import Clip
 
 
@@ -18,9 +19,9 @@ def ensure_qapp():
         import sys
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        if os.name == "nt":  # offscreen platform finds no fonts on Windows otherwise
-            os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
+        prepare_qt_fonts()
         ensure_qapp._app = QGuiApplication(sys.argv[:1])  # keep a reference
+        ensure_qapp._app.setFont(interface_font())
 
 
 def parse_color(s: str, default: str = "#ffffff") -> QColor:
@@ -37,7 +38,7 @@ def render_text_element(clip: Clip, px_scale: float) -> QImage:
     """Tight transparent image of the title (box + outline included), centred on its middle.
 
     px_scale = output pixels per project pixel (canvas_h / project_h x animated scale)."""
-    font = QFont(clip.font_family)
+    font = title_font(clip.font_family)
     font.setPixelSize(max(int(clip.font_size * px_scale), 4))
     font.setBold(clip.bold)
     fm = QFontMetricsF(font)
@@ -82,7 +83,7 @@ def render_text(clip: Clip, w: int, h: int, project_height: int) -> QImage:
     if not clip.text:
         return img
     k = (h / max(project_height, 1)) * clip.scale
-    font = QFont(clip.font_family)
+    font = title_font(clip.font_family)
     font.setPixelSize(max(int(clip.font_size * k), 4))
     font.setBold(clip.bold)
     fm = QFontMetricsF(font)

@@ -8,6 +8,8 @@ from clipeditor.editor import Editor
 from clipeditor.export import ffmpeg_exe
 from clipeditor.export_render import export_video
 
+from . import sample_media
+
 
 def make_video(tmp_path, fps, count):
     path = tmp_path / "numbered-frames.mkv"
@@ -81,3 +83,20 @@ def test_frame_removal_rejects_transition_overlap_and_invalid_time_without_edit(
         editor.remove_frame(0.9)
     assert not editor.remove_frame(editor.project.duration)
     assert editor.snapshot() == snapshot and len(editor._undo) == history
+
+
+def test_reopened_constant_speed_clip_exports_its_audio(tmp_path):
+    editor = Editor()
+    editor.project.width, editor.project.height = 160, 90
+    asset = editor.import_file(str(sample_media.SAMPLES / "clip_a.mp4"))
+    clip = editor.add_clip(asset.id)
+    editor.set_clip_props(clip.id, speed=2.0, out_point=2.0)
+    path = tmp_path / "speed.clipeditor.json"
+    editor.save(str(path))
+    editor.open(str(path))
+
+    result = tmp_path / "speed.mp4"
+    assert export_video(editor.project, str(result), preset="ultrafast") == "render"
+    with av.open(str(result)) as media:
+        assert media.streams.video and media.streams.audio
+        assert any(np.abs(frame.to_ndarray()).max() > 0.02 for frame in media.decode(audio=0))

@@ -2,16 +2,16 @@ import os
 
 import numpy as np
 import pytest
-from PySide6.QtGui import QGuiApplication
 
 from clipeditor import sfx, shapes
 from clipeditor.media import load_audio
 from clipeditor.model import Clip
+from clipeditor.textrender import ensure_qapp
 
 
 @pytest.fixture(scope="module", autouse=True)
 def app():
-    yield QGuiApplication.instance() or QGuiApplication([])
+    ensure_qapp()
 
 
 def _clip(shape):

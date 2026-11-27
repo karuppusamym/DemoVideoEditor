@@ -103,8 +103,7 @@ class Clip:
     sequence_id: str = ""  # linked source timeline, when this is a nested sequence
 
     def __post_init__(self):
-        if self.speed_ramp:
-            self.speed_ramp = validate_points(self.speed_ramp)
+        self.speed_ramp = validate_points(self.speed_ramp) if self.speed_ramp else ()
 
     @property
     def is_text(self) -> bool:

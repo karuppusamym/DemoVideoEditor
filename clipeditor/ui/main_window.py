@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QSlider, QF
                                QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
 
 from ..editor import Editor
+from ..fonts import interface_font
 from ..media import AudioCache
 from ..model import Project
 from .dialogs import ExportDialog, ShortcutsDialog, WelcomePage
@@ -81,7 +82,8 @@ class MainWindow(QMainWindow):
         self.btn_fwd = self._tbtn("▶▶", "Forward 1 second (Shift+→)", lambda: self.seek(self.playhead + 1))
         self.btn_end = self._tbtn("⏭", "Go to end (End)", lambda: self.seek(self.ed.project.duration))
         self.time_lbl = QLabel()
-        self.time_lbl.setStyleSheet("font-family: Consolas, monospace; font-size: 11pt; color: #d6d8de;")
+        self.time_lbl.setFont(interface_font(monospace=True))
+        self.time_lbl.setStyleSheet("font-size: 11pt; color: #d6d8de;")
         self.ratio = QComboBox()
         for label, w, h in (("16:9", 1920, 1080), ("9:16", 1080, 1920), ("1:1", 1080, 1080), ("4:5", 1080, 1350),
                             ("4:3", 1440, 1080), ("21:9", 2560, 1080), ("4K 16:9", 3840, 2160)):
@@ -952,7 +954,7 @@ class MainWindow(QMainWindow):
         self._rec_timer = QTimer(self)
         self._rec_timer.timeout.connect(lambda: self.status(
             f"● Recording {self._rec.elapsed():.1f}s   level {'▮' * int(self._rec.level() * 20):<20}   "
-            "— click Record voiceover again to stop", 500))
+            "— click Voiceover again to stop", 500))
         self._rec_timer.start(100)
 
     def text_to_speech(self):
@@ -1471,6 +1473,7 @@ QToolTip { color: #eee; background: #2b2d32; border: 1px solid #555; padding: 4p
 
 def apply_dark_theme(app: QApplication):
     app.setStyle("Fusion")
+    app.setFont(interface_font())
     pal = QPalette()
     base = QColor(36, 37, 41)
     pal.setColor(QPalette.ColorRole.Window, base)

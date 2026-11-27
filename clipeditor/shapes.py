@@ -39,7 +39,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
                            QPolygonF)
 
-EMOJI_FONT = "Segoe UI Emoji"
+from .fonts import emoji_font, title_font
+
 DEFAULT_SHAPE_DURATION = 5.0
 DEFAULT_EMOJI_DURATION = 3.0
 
@@ -289,7 +290,7 @@ def _draw_label(p: QPainter, s: dict, rect: QRectF, h_px: float) -> None:
     text = s.get("label")
     if not text:
         return
-    f = QFont(s.get("label_font", "Segoe UI"))
+    f = title_font(s.get("label_font", "Segoe UI"))
     f.setBold(True)
     f.setPixelSize(max(int(float(s.get("label_size", 0.45)) * h_px), 1))
     p.setFont(f)
@@ -298,7 +299,7 @@ def _draw_label(p: QPainter, s: dict, rect: QRectF, h_px: float) -> None:
 
 
 def _draw_emoji(p: QPainter, s: dict, rect: QRectF) -> None:
-    f = QFont(EMOJI_FONT)
+    f = emoji_font()
     f.setPixelSize(max(int(min(rect.width(), rect.height()) * 0.8), 1))
     f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     p.setFont(f)

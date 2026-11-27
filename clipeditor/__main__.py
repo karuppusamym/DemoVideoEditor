@@ -48,8 +48,10 @@ def main(argv=None):
 
     from PySide6.QtWidgets import QApplication
 
+    from .fonts import prepare_qt_fonts
     from .ui.main_window import MainWindow, apply_dark_theme
 
+    prepare_qt_fonts()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("ClipEditor")
     apply_dark_theme(app)

@@ -6,7 +6,7 @@ Once a property has keyframes, moving its slider edits (or creates) the keyframe
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit,
                                QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QToolButton,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBo
 
 from .. import animate, audio_fx
 from ..editor import Editor
+from ..fonts import title_font
 from ..retime import MAX_RATE, MIN_RATE, curve
 from ..transitions import DEFAULT_DURATION, KINDS, max_duration, neighbour_before, prev_clip
 from .keyframes import KeyframeEditor
@@ -743,7 +744,7 @@ class Inspector(QWidget):
         if c.is_text:
             if self.text_edit.toPlainText() != c.text and not self.text_edit.hasFocus():
                 self.text_edit.setPlainText(c.text)
-            self.font_combo.setCurrentFont(QFont(c.font_family))
+            self.font_combo.setCurrentFont(title_font(c.font_family))
             self.size_spin.setValue(c.font_size)
             self.bold.setChecked(c.bold)
             self.color_btn.load(c.color)
