@@ -84,3 +84,17 @@ def test_export_preserves_existing_file_on_failure(tmp_path, engine, cancel):
     assert output.read_bytes() == b"existing export"
     assert list(tmp_path.iterdir()) == [output]
     assert 1.0 not in progress
+
+
+@pytest.mark.parametrize("engine", ["graph", "render"])
+def test_export_cannot_replace_project_media(tmp_path, engine):
+    path = tmp_path / "clip_a.mp4"
+    shutil.copyfile(SAMPLES / path.name, path)
+    editor = Editor()
+    asset = editor.import_file(str(path))
+    editor.add_clip(asset.id)
+
+    with pytest.raises(ValueError, match="used as project media"):
+        export_video(editor.project, str(path), engine=engine)
+
+    assert path.read_bytes() == (SAMPLES / path.name).read_bytes()

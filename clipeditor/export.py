@@ -214,9 +214,12 @@ def check_cancelled(cancelled: Callable[[], bool] | None) -> None:
 
 
 @contextmanager
-def export_destination(path: str, cancelled: Callable[[], bool] | None):
+def export_destination(project: Project, path: str, cancelled: Callable[[], bool] | None):
     check_cancelled(cancelled)
     destination = Path(path).resolve()
+    for asset in project.assets.values():
+        if any(source and Path(source).resolve() == destination for source in (asset.path, asset.proxy_path)):
+            raise ValueError("Choose an export file that is not used as project media.")
     with tempfile.TemporaryDirectory(prefix=".clipeditor-", dir=destination.parent) as work:
         pending = Path(work) / destination.name
         yield str(pending)
@@ -226,7 +229,7 @@ def export_destination(path: str, cancelled: Callable[[], bool] | None):
 
 def export(project: Project, out_path: str, progress: Callable[[float], None] | None = None,
            cancelled: Callable[[], bool] | None = None, **opts) -> None:
-    with export_destination(out_path, cancelled) as pending:
+    with export_destination(project, out_path, cancelled) as pending:
         with tempfile.TemporaryDirectory(prefix="clipeditor_export_") as work:
             if opts.get("workdir") is None:
                 opts["workdir"] = work

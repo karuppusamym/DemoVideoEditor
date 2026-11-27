@@ -91,7 +91,7 @@ def export_render(project: Project, out_path: str, progress: Callable[[float], N
     n_frames = max(int(round(D * fps)), 1)
     prog = progress or (lambda _v: None)
 
-    with export_destination(out_path, cancelled) as pending:
+    with export_destination(project, out_path, cancelled) as pending:
         prog(0.0)
         with tempfile.TemporaryDirectory(prefix="clipeditor_audio_") as work:
             apath = str(Path(work) / "audio.f32")
