@@ -21,6 +21,7 @@ from . import animate, effects, masks, shapes
 from .media import VideoReader
 from .model import Project
 from .textrender import render_text_element
+from . import grade, transitions as _transitions
 from .transitions import video_alpha, video_offset
 
 BLEND_MODES = {
@@ -87,6 +88,7 @@ class Compositor:
         self.images: dict[str, QImage] = {}
         self._cache: dict[tuple, QImage] = {}
         self.last_error: str | None = None
+        self._tfx = None
 
     # ---- sources ---------------------------------------------------------
     def reader(self, path: str, lane: str = "") -> VideoReader:
@@ -145,9 +147,18 @@ class Compositor:
     def _draw_clip(self, p, project, canvas_height, track, clip, lane, t, w, h, stack):
         props = animate.resolve(clip, t)
         alpha = props.opacity * video_alpha(track, clip, t)
+        tfx = _transitions.frame_fx(track, clip, t, w, h)
+        self._tfx = tfx if tfx is not None and (tfx.mask or tfx.pixel) else None
+        if tfx is not None:
+            props.scale *= tfx.scale
+            props.rotation += tfx.rotation
+            alpha *= tfx.alpha
         if alpha <= 0.001 or props.scale <= 0:
             return
         dx, dy = video_offset(track, clip, t, w, h)
+        if tfx is not None:
+            dx += tfx.dx
+            dy += tfx.dy
         t_local = t - clip.presentation_start
         k = h / max(canvas_height, 1)  # output px per project px
 
@@ -159,12 +170,12 @@ class Compositor:
                               clip.bold, round(k * props.scale, 3)),
                              lambda: render_text_element(clip, k * props.scale))
             fw, fh = q.width(), q.height()
-            pixel_fx = effects.active(clip) or masks.active(clip)
+            pixel_fx = self._fx_needed(clip)
         elif clip.is_shape:
             q = self._cached(("shape", repr(sorted(clip.shape.items())), round(h * props.scale, 1)),
                              lambda: shapes.render_shape(clip, max(int(h * props.scale), 2)))
             fw, fh = q.width(), q.height()
-            pixel_fx = effects.active(clip) or masks.active(clip)
+            pixel_fx = self._fx_needed(clip)
         elif clip.sequence_id:
             source = project.timelines.get(clip.sequence_id)
             if source is None or source.id in stack:
@@ -180,7 +191,7 @@ class Compositor:
                 return
             cap = min(1.0, self.MAX_DECODE * w / fw, self.MAX_DECODE * h / fh)
             q = self._render_timeline(project, source, st, max(round(fw * cap), 1), max(round(fh * cap), 1), stack)
-            if self.needs_eq(clip) or effects.active(clip) or masks.active(clip):
+            if self.needs_eq(clip) or self._fx_needed(clip):
                 q = self._pixels(qimage_to_rgba(q), clip, t_local, h)
         else:
             asset = project.assets.get(clip.asset_id)
@@ -193,7 +204,7 @@ class Compositor:
                 return
             cap = min(1.0, self.MAX_DECODE * w / fw, self.MAX_DECODE * h / fh)
             dw, dh = max(int(fw * cap) & ~1, 2), max(int(fh * cap) & ~1, 2)
-            pixel_fx = self.needs_eq(clip) or effects.active(clip) or masks.active(clip)
+            pixel_fx = self.needs_eq(clip) or self._fx_needed(clip)
             if asset.kind == "image":
                 src = self._image(asset.path)
                 if src is None:
@@ -213,7 +224,7 @@ class Compositor:
                     if arr is None:
                         return
                     q = rgba_to_qimage(arr) if not pixel_fx else None
-                    rgba = arr if pixel_fx else None
+                    rgba = arr.copy() if pixel_fx else None  # reader caches frames: never mutate them
                 else:
                     arr = r.rgb_at(st, dw, dh)
                     if arr is None:
@@ -253,13 +264,27 @@ class Compositor:
         p.drawImage(target, q, src_rect)
         p.restore()
 
+    def _fx_needed(self, clip) -> bool:
+        return effects.active(clip) or masks.active(clip) or grade.active(clip) or self._tfx is not None
+
     def _pixels(self, rgba: np.ndarray, clip, t_local: float, canvas_h: int) -> QImage:
         if self.needs_eq(clip):
             rgba = apply_eq(rgba, clip.brightness, clip.contrast, clip.saturation)
+        if grade.active(clip):
+            rgba = grade.apply(rgba, clip)
         if effects.active(clip):
             rgba = effects.apply(rgba, clip, t_local, canvas_h)
         if masks.active(clip):
             rgba = masks.apply(rgba, clip, t_local)
+        tfx = self._tfx
+        if tfx is not None:
+            if not rgba.flags.writeable:
+                rgba = rgba.copy()
+            if tfx.mask is not None:
+                cov = tfx.mask(rgba.shape[0], rgba.shape[1])
+                rgba[..., 3] = (rgba[..., 3].astype(np.float32) * cov + 0.5).astype(np.uint8)
+            if tfx.pixel is not None:
+                rgba = tfx.pixel(rgba)
         return rgba_to_qimage(rgba)
 
     def close(self):

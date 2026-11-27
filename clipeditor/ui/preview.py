@@ -17,7 +17,7 @@ from ..render import Compositor  # noqa: F401  (re-exported for main_window)
 class PreviewWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(320, 180)
+        self.setMinimumSize(240, 135)
         self.image: QImage | None = None
         self.aspect = 16 / 9
         self.safe_zones = False

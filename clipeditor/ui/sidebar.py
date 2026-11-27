@@ -328,15 +328,22 @@ class TransitionsPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.addWidget(_title("Transitions", "Select the clip AFTER a cut (or nothing: the cut nearest the "
                                             "playhead is used), then click a style."))
-        from ..transitions import KINDS
+        from .. import transitions as T
 
-        g = Gallery()
         icons = {"dissolve": "◐", "fadeblack": "●", "slideleft": "⇠", "slideright": "⇢",
-                 "slideup": "⇡", "slidedown": "⇣"}
-        for i, (k, label) in enumerate(KINDS.items()):
-            g.add(label, icon_card(icons.get(k, "⇄"), ["#2b6cb0", "#6b46c1", "#c05621", "#2f855a",
-                                                        "#b83280", "#2c7a7b"][i % 6], "#1a202c"), k, label)
-        lay.addWidget(g, 1)
+                 "slideup": "⇡", "slidedown": "⇣", **getattr(T, "ICONS", {})}
+        cats = getattr(T, "CATEGORIES", None) or {"All": list(T.KINDS)}
+        palette = ["#2b6cb0", "#6b46c1", "#c05621", "#2f855a", "#b83280", "#2c7a7b"]
+        tabs = QTabWidget()
+        galleries = []
+        for ci, (cat, kinds) in enumerate(cats.items()):
+            g = Gallery()
+            for k in kinds:
+                if k in T.KINDS:
+                    g.add(T.KINDS[k], icon_card(icons.get(k, "⇄"), palette[ci % 6], "#1a202c"), k, T.KINDS[k])
+            tabs.addTab(g, cat)
+            galleries.append(g)
+        lay.addWidget(tabs, 1)
         row = QHBoxLayout()
         row.addWidget(QLabel("Length"))
         self.dur = QSlider(Qt.Orientation.Horizontal)
@@ -350,7 +357,8 @@ class TransitionsPanel(QWidget):
         allb = QPushButton("Apply selected style to every cut")
         lay.addWidget(allb)
         self.kind = "dissolve"
-        g.picked.connect(self._pick)
+        for g in galleries:
+            g.picked.connect(self._pick)
         allb.clicked.connect(lambda: win.transitions_everywhere(self.kind, self.dur.value() / 100))
 
     def _pick(self, kind):
@@ -407,6 +415,9 @@ AI_TOOLS = [
     ("auto_reframe", "📱", "Auto reframe 9:16", "Smart crop that follows the action, for Shorts/Reels."),
     ("reverse", "⏪", "Reverse clip", "Play the clip backwards."),
     ("tts", "🗣", "Text to speech", "Turn a script into a voiceover."),
+    ("isolate_vocals", "🎤", "Isolate voice", "Keep only the voice — remove music and background."),
+    ("remove_vocals", "🎼", "Remove vocals", "Karaoke: keep the music, remove the singing/speech."),
+    ("voice_clone", "🧬", "Voice clone / match", "Speak new text in a voice from a recording."),
 ]
 
 
@@ -434,7 +445,7 @@ class AIPanel(QWidget):
 class Sidebar(QWidget):
     def __init__(self, win, media_bin):
         super().__init__()
-        self.setMinimumWidth(330)
+        self.setMinimumWidth(250)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -459,7 +470,7 @@ class Sidebar(QWidget):
             b.setText(f"{icon}\n{label}")
             b.setCheckable(True)
             b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            b.setFixedSize(64, 54)
+            b.setFixedSize(60, 46)
             b.setStyleSheet("QToolButton { border: none; border-radius: 8px; color: #b7bcc6; font-size: 8pt; }"
                             "QToolButton:checked { background: #23395d; color: white; }"
                             "QToolButton:hover { background: #2a2c31; }")
@@ -473,10 +484,21 @@ class Sidebar(QWidget):
             self.stack.addWidget(panel)
             self.keys.append(key)
         rl.addStretch(1)
-        lay.addWidget(rail)
+        # the rail scrolls on short screens instead of forcing the window taller
+        from PySide6.QtWidgets import QFrame
+        rail_scroll = QScrollArea()
+        rail_scroll.setWidget(rail)
+        rail_scroll.setWidgetResizable(True)
+        rail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        rail_scroll.setFixedWidth(70)
+        rail_scroll.setMinimumHeight(120)
+        lay.addWidget(rail_scroll)
         lay.addWidget(self.stack, 1)
         self.group.idClicked.connect(self.stack.setCurrentIndex)
         self.group.button(0).setChecked(True)
+        self.stack.setCurrentIndex(0)
 
     def show_panel(self, key: str):
         i = self.keys.index(key)

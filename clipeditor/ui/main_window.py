@@ -111,7 +111,13 @@ class MainWindow(QMainWindow):
         pl.addWidget(self.preview, 1)
         pl.addLayout(transport)
         self.center = QStackedWidget()
-        self.center.addWidget(self.welcome)
+        # the welcome card is tall: let it scroll so it never forces the window (or squeezes the timeline)
+        from PySide6.QtWidgets import QFrame, QScrollArea
+        welcome_scroll = QScrollArea()
+        welcome_scroll.setWidget(self.welcome)
+        welcome_scroll.setWidgetResizable(True)
+        welcome_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.center.addWidget(welcome_scroll)
         self.center.addWidget(player_page)
 
         self.sidebar = Sidebar(self, self.bin)
@@ -133,9 +139,15 @@ class MainWindow(QMainWindow):
         tl_lay.addWidget(self.range_bar)
         tl_lay.addWidget(self.timeline, 1)
         main.addWidget(tl_box)
-        main.setSizes([540, 320])
+        main.setSizes([580, 420])  # proportions: the timeline keeps ~42% of the height on short screens
+        main.setStretchFactor(0, 58)
+        main.setStretchFactor(1, 42)
         self.setCentralWidget(main)
-        self.resize(1520, 940)
+        avail = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else None
+        if avail is not None:
+            self.resize(min(1520, int(avail.width() * 0.96)), min(940, int(avail.height() * 0.94)))
+        else:
+            self.resize(1520, 940)
         self.assistant_dock = None
 
         self._build_toolbar()
@@ -190,7 +202,9 @@ class MainWindow(QMainWindow):
         sp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tb.addWidget(sp)
         search = QPushButton("🔎   Search commands, effects, stickers…        Ctrl+K")
-        search.setMinimumWidth(380)
+        search.setMinimumWidth(170)
+        search.setMaximumWidth(460)
+        search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         search.setStyleSheet("text-align: left; color: #9aa0aa; background: #1f2024; padding: 6px 12px;")
         search.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         search.clicked.connect(self.open_palette)
@@ -310,9 +324,12 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(6, 2, 6, 2)
         lay.setSpacing(2)
 
+        self._tl_tools = []
+
         def tool(text, tip, fn, checkable=False):
             b = QToolButton()
             b.setText(text)
+            self._tl_tools.append((b, text))
             b.setToolTip(tip)
             b.setCheckable(checkable)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -345,6 +362,8 @@ class MainWindow(QMainWindow):
         fr.setMenu(fm)
         lay.addWidget(fr)
         lay.addStretch(1)
+        self.magnet_btn = tool("⧉ Magnetic", "Magnetic main track: no gaps, clips insert instead of overwrite",
+                               lambda: self.ed.set_magnetic(self.magnet_btn.isChecked()), True)
         self.snap_btn = tool("🧲", "Snapping on/off", lambda: self._toggle_snap(self.snap_btn.isChecked()), True)
         self.snap_btn.setChecked(True)
         lay.addWidget(QLabel("  🔍"))
@@ -439,6 +458,15 @@ class MainWindow(QMainWindow):
         self._act(tools, "Remove silences…", self.remove_silences)
         self._act(v, "Command palette", self.open_palette, "Ctrl+K")
         self._act(v, "AI Assistant", lambda: self.toggle_assistant(), "Ctrl+J")
+        lang = mb.addMenu("&Language")
+        try:
+            from .. import i18n
+
+            for code, name in i18n.available_languages().items():
+                act = lang.addAction(name, lambda c=code: i18n.switch_language(QApplication.instance(), self, c))
+                act.setProperty("i18n_skip", True)  # language names are always shown in their own language
+        except Exception as e:  # noqa: BLE001 - translations are optional
+            lang.addAction(f"Unavailable: {e}").setEnabled(False)
         h = mb.addMenu("&Help")
         self._act(h, "Keyboard shortcuts", self.show_shortcuts, "F1")
 
@@ -453,6 +481,8 @@ class MainWindow(QMainWindow):
 
     # ---- editor events ---------------------------------------------------
     def on_editor_change(self, reason: str):
+        if hasattr(self, "magnet_btn"):
+            self.magnet_btn.setChecked(self.ed.is_magnetic())
         project = self.ed.project
         timeline_id = project.active_timeline_id
         if reason == "load":
@@ -986,6 +1016,86 @@ class MainWindow(QMainWindow):
             self.ed.add_clip(a[0].id, None, self.playhead)
             self.status("Voiceover from text added ✓")
 
+    def voice_clone(self):
+        """Speak new text in the voice of the selected clip (or a chosen recording)."""
+        from PySide6.QtWidgets import QInputDialog
+
+        from ..ai import voice_clone as vc
+
+        ref = None
+        sel = [c for c in self.ed.selected_clips() if not c.is_generated]
+        if sel:
+            a = self.ed.project.assets.get(sel[0].asset_id)
+            if a is not None and a.has_audio:
+                ref = a.path
+        if ref is None:
+            ref, _ = QFileDialog.getOpenFileName(self, "Pick a recording of the voice (10-30 s)", "",
+                                                 "Audio/video (*.wav *.mp3 *.m4a *.flac *.mp4 *.mov *.mkv)")
+            if not ref:
+                return
+        engines = list(vc.available_engines()) if hasattr(vc, "available_engines") else []
+
+        def label_of(e):
+            spec = getattr(vc, "ENGINES", {}).get(e, e)
+            return spec.get("label", e) if isinstance(spec, dict) else str(spec)
+        engine = None
+        if len(engines) > 1:
+            names = [label_of(e) for e in engines]
+            pick, ok = QInputDialog.getItem(self, "Voice clone", "Engine", names, 0, False)
+            if not ok:
+                return
+            engine = engines[names.index(pick)]
+        opts = {}
+        if engine == "xtts":
+            r = QMessageBox.question(self, "Coqui XTTS licence",
+                                     "XTTS v2 is released under the Coqui Public Model License, which allows "
+                                     "NON-COMMERCIAL use only.\n\nDo you accept that licence for this use?")
+            if r != QMessageBox.StandardButton.Yes:
+                return
+            opts["accept_license"] = True
+        if engine in (None, "match") and not any(getattr(vc, "ENGINES", {}).get(e, {}).get("real_clone")
+                                                 for e in engines if isinstance(getattr(vc, "ENGINES", {}).get(e), dict)):
+            self.status("Using Voice match (approximate): a Windows voice tuned toward the reference. "
+                        "Install F5-TTS for real cloning.", 9000)
+        text, ok = QInputDialog.getMultiLineText(self, "Voice clone", "What should the voice say?")
+        if not ok or not text.strip():
+            return
+        prog = QProgressDialog("Creating the voice...", "Cancel", 0, 1000, self)
+        prog.setWindowModality(Qt.WindowModality.WindowModal)
+        prog.setMinimumDuration(0)
+        sig, st = _ExportSignals(), _JobStatus()
+        cancel = threading.Event()
+        prog.canceled.connect(cancel.set)
+        sig.progress.connect(lambda v: prog.setValue(int(v * 1000)))
+        st.text.connect(prog.setLabelText)
+        out = {}
+        at = self.playhead
+
+        def done(err):
+            prog.reset()
+            if err:
+                if not cancel.is_set():
+                    QMessageBox.warning(self, "Voice clone", err[-1500:])
+                return
+            added = self.import_paths([out["path"]])
+            if added:
+                added[0].origin = "voice_clone"
+                self.ed.add_clip(added[0].id, None, at)
+                self.status("New voice line added at the playhead ✓")
+
+        sig.done.connect(done)
+
+        def work():
+            try:
+                out["path"] = vc.clone_and_speak(ref, text, engine=engine, progress=sig.progress.emit,
+                                                 cancelled=cancel.is_set, status=st.text.emit, **opts)
+                sig.done.emit("cancelled" if cancel.is_set() else "")
+            except Exception as e:  # noqa: BLE001
+                sig.done.emit(f"{type(e).__name__}: {e}")
+
+        self._vc_sigs = (sig, st)
+        threading.Thread(target=work, daemon=True).start()
+
     # ---- AI tools --------------------------------------------------------
     def run_ai_tool(self, key: str):
         if key == "assistant":
@@ -1003,6 +1113,8 @@ class MainWindow(QMainWindow):
                                     if not any(f.get("type") == "ai_denoise" for f in c.audio_fx) else None)
             self.status("AI noise removal on — processing in the background")
             return
+        if key == "voice_clone":
+            return self.voice_clone()
         # video jobs on the selected clip -> new file -> swap
         clips = [c for c in self.ed.selected_clips() if c.asset_id and not c.sequence_id]
         if len(clips) != 1:
@@ -1011,7 +1123,16 @@ class MainWindow(QMainWindow):
         clip = clips[0]
         asset = self.ed.project.assets.get(clip.asset_id)
         try:
-            if key == "bgremove":
+            if key in ("isolate_vocals", "remove_vocals"):
+                if asset is None or not asset.has_audio:
+                    self.status("Select a clip that has sound first.")
+                    return
+                from ..ai import stems
+
+                fn = getattr(stems, key)
+                kwargs = {}
+                label = "Isolating the voice" if key == "isolate_vocals" else "Removing vocals"
+            elif key == "bgremove":
                 from ..ai import bgremove
 
                 fn = bgremove.remove_background
@@ -1082,6 +1203,14 @@ class MainWindow(QMainWindow):
             if self.ed.project.find_clip(clip.id)[1] is None:
                 self.ed.add_asset(new)
                 self.status(f"{label} done. The result is in the media bin.")
+                return
+            if key in ("isolate_vocals", "remove_vocals") and asset.has_video:
+                # keep the picture: mute the original and lay the processed sound underneath
+                self.ed.add_asset(new)
+                self.ed.set_clip_props(clip.id, volume=0.0)
+                self.ed.add_clip(new.id, None, clip.start)
+                self.loader.load(new)
+                self.status(f"{label} done ✓ — new audio clip added below; Ctrl+Z to undo")
                 return
             self.ed.swap_asset(clip.id, new, keep_timing=key != "smooth_slowmo")
             self.status(f"{label} done ✓ — Ctrl+Z to go back to the original")
@@ -1435,6 +1564,16 @@ class MainWindow(QMainWindow):
 
         self._export_sig = sig  # keep alive
         threading.Thread(target=run, daemon=True).start()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        # narrow screens (e.g. 1280 px at 150 % scaling): timeline tools show icons only
+        compact = self.width() < 1400
+        for b, text in getattr(self, "_tl_tools", []):
+            parts = text.split(" ", 1)
+            b.setText(parts[0] if compact and len(parts) == 2 else text)
+        if hasattr(self, "zoom"):
+            self.zoom.setFixedWidth(90 if compact else 150)
 
     def closeEvent(self, e):
         if not self._confirm_discard():

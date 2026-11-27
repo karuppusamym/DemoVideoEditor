@@ -576,7 +576,8 @@ class TimelineCanvas(QWidget):
         if d and d.get("moved"):
             tr, c = self.ed.project.find_clip(d["clip"])
             if c is not None:
-                tr.clear_range(c.start, c.end, keep_id=c.id)
+                if not self.ed.is_magnetic(tr):  # magnetic main track re-packs instead of overwriting
+                    tr.clear_range(c.start, c.end, keep_id=c.id)
             self.ed.checkpoint(d["snap"])
             self.ed.notify("edit")
         self.update()
@@ -664,7 +665,15 @@ class TimelinePanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self.canvas, 1)
+        # tracks scroll vertically so many tracks (or a short screen) never push the window taller
+        from PySide6.QtWidgets import QFrame, QScrollArea
+        self.vscroll = QScrollArea()
+        self.vscroll.setWidget(self.canvas)
+        self.vscroll.setWidgetResizable(True)
+        self.vscroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.vscroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.vscroll.setMinimumHeight(110)
+        lay.addWidget(self.vscroll, 1)
         lay.addWidget(self.hbar)
         self.hbar.valueChanged.connect(self._on_bar)
         self.canvas.scroll_changed.connect(self.sync_bar)

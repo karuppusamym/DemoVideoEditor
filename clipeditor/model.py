@@ -101,6 +101,10 @@ class Clip:
     presentation_in: float = 0.0  # elapsed effect time retained after a frame cut
     presentation_out: float = 0.0
     sequence_id: str = ""  # linked source timeline, when this is a nested sequence
+    # pro colour grading (clipeditor.grade): {} = off. Keys: lift/gamma/gain [r,g,b] wheels,
+    # temperature, tint, exposure, highlights, shadows, vibrance, curves {"master"|"r"|"g"|"b": [[x,y],..]},
+    # hsl {hue_name: {"h","s","l"}}, lut (path to .cube), lut_mix
+    grade: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.speed_ramp = validate_points(self.speed_ramp) if self.speed_ramp else ()
@@ -241,6 +245,7 @@ class Timeline:
     fps: float = 30.0
     tracks: list[Track] = field(default_factory=list)
     frame_cuts: bool = False  # use the preview's frame selection for export
+    magnetic: bool = False  # main track closes gaps automatically after edits
 
     @property
     def duration(self) -> float:
@@ -253,7 +258,7 @@ class Timeline:
                         clips=[Clip(**{k: v for k, v in clip.items() if k in known}) for clip in track["clips"]])
                   for track in data["tracks"]]
         return cls(data["id"], data["name"], data["width"], data["height"], data["fps"], tracks,
-                   data.get("frame_cuts", False))
+                   data.get("frame_cuts", False), data.get("magnetic", False))
 
 
 class Project:
