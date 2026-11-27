@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from . import animate
 from .media import DEFAULT_IMAGE_CLIP, probe
 from .model import MIN_CLIP, Clip, MediaAsset, Project, Track, new_id
 from .retime import validate_points
@@ -248,7 +249,8 @@ class Editor:
             return
         self.checkpoint()
         for tr, c in targets:
-            right = replace(c, id=new_id(), start=t, in_point=c.source_time(t), fade_in=0.0, transition=0.0)
+            right = replace(c, id=new_id(), start=t, in_point=c.source_time(t), fade_in=0.0, transition=0.0,
+                            keyframes=animate.shift_keyframes(c.keyframes, t - c.start))
             c.out_point = c.source_time(t)
             c.fade_out = 0.0
             tr.clips.append(right)
@@ -273,7 +275,7 @@ class Editor:
             for c in list(tr.clips):
                 if c.start + 1e-6 < t < c.end - 1e-6:
                     right = replace(c, id=new_id(), start=t, in_point=c.source_time(t), fade_in=0.0,
-                                    transition=0.0)
+                                    transition=0.0, keyframes=animate.shift_keyframes(c.keyframes, t - c.start))
                     c.out_point = c.source_time(t)
                     c.fade_out = 0.0
                     tr.clips.append(right)
@@ -323,7 +325,8 @@ class Editor:
                 if c.end <= a + 1e-6 or c.start >= b - 1e-6:
                     continue
                 s0, s1 = max(a, c.start), min(b, c.end)
-                cp = replace(c, id=new_id(), start=s0 + d, in_point=c.source_time(s0), out_point=c.source_time(s1))
+                cp = replace(c, id=new_id(), start=s0 + d, in_point=c.source_time(s0), out_point=c.source_time(s1),
+                             keyframes=animate.shift_keyframes(c.keyframes, s0 - c.start))
                 if c.start < a - 1e-6:
                     cp.fade_in, cp.transition = 0.0, 0.0
                 if c.end > b + 1e-6:
@@ -414,7 +417,9 @@ class Editor:
         for tr in p.video_tracks():
             for c in tr.clips:
                 a = p.assets.get(c.asset_id)
-                if a is not None and c.id in self.selection and a.has_audio and a.kind == "video" and c.volume > 0:
+                keys = animate.keyframes_for(c, "volume")
+                if (a is not None and c.id in self.selection and a.has_audio and a.kind == "video"
+                        and (any(value > 0 for _, value, _ in keys) if keys else c.volume > 0)):
                     made.append(c)
         if not made:
             return
@@ -430,7 +435,9 @@ class Editor:
                 target = self.add_track("audio", notify=False)
             target.clips.append(Clip(new_id(), c.asset_id, c.start, c.in_point, c.out_point, c.volume,
                                      speed=c.speed, fade_in=c.fade_in, fade_out=c.fade_out,
-                                     speed_ramp=c.speed_ramp))
+                                     speed_ramp=c.speed_ramp,
+                                     keyframes=animate.shift_keyframes({"volume": (c.keyframes or {}).get("volume")}, 0.0)))
+            animate.clear_keyframes(c, "volume")
             c.volume = 0.0
         self.notify("edit")
 
@@ -442,6 +449,9 @@ class Editor:
             props.setdefault("speed_ramp", ())
         if "speed_ramp" in props:
             props["speed_ramp"] = validate_points(props["speed_ramp"])
+        if "in_point" in props and c.keyframes:
+            offset = c.time_between(c.in_point, props["in_point"])
+            props.setdefault("keyframes", animate.shift_keyframes(c.keyframes, offset))
         self.checkpoint()
         for k, v in props.items():
             setattr(c, k, v)
@@ -451,6 +461,24 @@ class Editor:
                 c.out_point = min(c.out_point, asset.duration)
             tr.clear_range(c.start, c.end, keep_id=c.id)
         self.notify("props")
+
+    def set_keyframes(self, clip_id: str, prop: str, keys: list[tuple[float, float, str]]) -> bool:
+        """Replace one property's curve as a single undoable edit."""
+        _, clip = self.project.find_clip(clip_id)
+        if clip is None or prop not in animate.KEYFRAME_PROPS:
+            return False
+        keys = sorted(keys, key=lambda key: key[0])
+        if keys == animate.keyframes_for(clip, prop):
+            return False
+        self.checkpoint()
+        if keys:
+            if clip.keyframes is None:
+                clip.keyframes = {}
+            clip.keyframes[prop] = [list(key) for key in keys]
+        else:
+            clip.keyframes.pop(prop, None)
+        self.notify("props")
+        return True
 
     def add_shape(self, shape: dict, start: float | None = None, duration: float = 4.0, **fields) -> Clip:
         """Add a shape/sticker clip on the top-most video track that is free at `start`."""
@@ -532,7 +560,7 @@ class Editor:
         self.checkpoint()
         new_sel = set()
         for tr, c in made:
-            d = replace(c, id=new_id(), start=c.end)
+            d = replace(c, id=new_id(), start=c.end, keyframes=animate.shift_keyframes(c.keyframes, 0.0))
             tr.clear_range(d.start, d.end)
             tr.clips.append(d)
             new_sel.add(d.id)

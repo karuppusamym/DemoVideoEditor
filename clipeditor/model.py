@@ -8,6 +8,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .animate import shift_keyframes
 from .retime import curve, validate_points
 
 MIN_CLIP = 1 / 30  # shortest clip allowed, seconds
@@ -199,6 +200,7 @@ class Track:
                 tail = Clip(**asdict(c))
                 tail.id = new_id() if c.start < start else c.id
                 tail.in_point = c.source_time(end)
+                tail.keyframes = shift_keyframes(c.keyframes, end - c.start)
                 tail.fade_in = 0.0
                 tail.transition = 0.0
                 tail.start = end

@@ -16,6 +16,7 @@ from .. import animate, audio_fx
 from ..editor import Editor
 from ..retime import MAX_RATE, MIN_RATE, curve
 from ..transitions import DEFAULT_DURATION, KINDS, max_duration, neighbour_before, prev_clip
+from .keyframes import KeyframeEditor
 from .timeline import fmt_time
 
 SPEEDS = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 8.0]
@@ -205,6 +206,9 @@ class Inspector(QWidget):
         self._build_adjust()
         self._build_mask()
         self._build_anim()
+        self.tab_keys, key_layout = _page()
+        self.keyframe_editor = KeyframeEditor(editor, win.seek if win is not None else self.sync_curve_playhead)
+        key_layout.addWidget(self.keyframe_editor)
         self._build_speed()
         self._build_audio()
         self.refresh()
@@ -659,6 +663,8 @@ class Inspector(QWidget):
     # ---- refresh ---------------------------------------------------------
     def sync_time(self):
         """Playhead moved: update keyframe-driven values."""
+        if self.win is not None:
+            self.sync_curve_playhead(self.win.playhead)
         c = self.clip()
         if c is None or not c.keyframes:
             return
@@ -668,6 +674,9 @@ class Inspector(QWidget):
                 r.load(c)
         self._kf_text(c)
         self.loading = False
+
+    def sync_curve_playhead(self, time):
+        self.keyframe_editor.set_playhead(time)
 
     def _kf_text(self, c):
         props = ", ".join(sorted((c.keyframes or {}).keys())) or "none yet"
@@ -682,6 +691,7 @@ class Inspector(QWidget):
             tr, c = self.ed.project.find_clip(next(iter(self.ed.selection)))
         self.clip_id = c.id if c else None
         if c is None:
+            self.keyframe_editor.set_clip(None, ())
             self.tabs.hide()
             self.placeholder.show()
             n = len(self.ed.selection)
@@ -705,9 +715,14 @@ class Inspector(QWidget):
         if visual:
             want += [(self.tab_video, "Video"), (self.tab_adjust, "Adjust"), (self.tab_mask, "Mask & Key"),
                      (self.tab_anim, "Animation")]
+        if visual or has_audio:
+            want.append((self.tab_keys, "Keyframes"))
         want.append((self.tab_speed, "Speed"))
         if has_audio:
             want.append((self.tab_audio, "Audio"))
+        key_properties = tuple(prop for prop in animate.KEYFRAME_PROPS
+                               if (has_audio if prop == "volume" else visual))
+        self.keyframe_editor.set_clip(c, key_properties)
         current = self.tabs.currentWidget()
         if [self.tabs.widget(i) for i in range(self.tabs.count())] != [w for w, _ in want]:
             self.tabs.clear()

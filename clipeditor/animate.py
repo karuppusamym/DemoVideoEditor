@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 KEYFRAME_PROPS = ("scale", "pos_x", "pos_y", "rotation", "opacity", "volume")
 EASINGS = ("linear", "ease_in", "ease_out", "ease", "hold", "bounce", "elastic")
@@ -102,16 +103,32 @@ def _norm(k) -> tuple[float, float, str]:
     return t, v, e
 
 
-def _keys(clip, prop: str) -> list[tuple[float, float, str]]:
-    kfs = (getattr(clip, "keyframes", None) or {}).get(prop) or []
+def keyframes_for(clip, prop: str) -> list[tuple[float, float, str]]:
+    """Return an ordered view of a property's keyframes without changing the clip."""
+    return _valid_keys((getattr(clip, "keyframes", None) or {}).get(prop))
+
+
+def _valid_keys(keys) -> list[tuple[float, float, str]]:
     out = []
-    for k in kfs:
+    for k in keys or ():
         try:
-            out.append(_norm(k))
+            key = _norm(k)
+            if math.isfinite(key[0]) and math.isfinite(key[1]):
+                out.append(key)
         except (TypeError, ValueError, IndexError):
             continue
     out.sort(key=lambda k: k[0])
     return out
+
+
+def shift_keyframes(keyframes, offset: float) -> dict:
+    """Copy curves with times relative to a new clip start."""
+    shifted = {}
+    for prop, keys in (keyframes or {}).items():
+        valid = _valid_keys(keys)
+        if valid:
+            shifted[prop] = [[t - offset, value, ease] for t, value, ease in valid]
+    return shifted
 
 
 def _interp(keys: list[tuple[float, float, str]], t: float) -> float:
@@ -132,10 +149,42 @@ def _interp(keys: list[tuple[float, float, str]], t: float) -> float:
 def value_at(clip, prop: str, t_local: float) -> float:
     """Keyframed value of `prop` at t_local (seconds from clip start), else the clip's base value.
     No in/out/loop presets applied (this is what the inspector shows / edits)."""
-    keys = _keys(clip, prop)
+    keys = keyframes_for(clip, prop)
     if keys:
         return _interp(keys, t_local)
     return float(getattr(clip, prop))
+
+
+@lru_cache(maxsize=len(EASINGS))
+def _easing_samples(kind: str):
+    import numpy as np
+
+    positions = np.linspace(0.0, 1.0, 1025)
+    return positions, np.array([ease(u, kind) for u in positions])
+
+
+def sample_keyframes(keys, start: float, count: int, rate: int):
+    """Sample a populated curve over an audio block in clip-local seconds."""
+    import numpy as np
+
+    times = start + np.arange(count, dtype=np.float64) / rate
+    boundaries = times.searchsorted([t for t, _, _ in keys])
+    values = np.empty(count, dtype=np.float32)
+    values[:boundaries[0]] = keys[0][1]
+    values[boundaries[-1]:] = keys[-1][1]
+    for i, ((t0, v0, kind), (t1, v1, _)) in enumerate(zip(keys, keys[1:])):
+        span = slice(boundaries[i], boundaries[i + 1])
+        if span.start == span.stop:
+            continue
+        if kind == "hold":
+            values[span] = v0
+            continue
+        fraction = (times[span] - t0) / (t1 - t0)
+        if kind != "linear":
+            positions, eased = _easing_samples(kind)
+            fraction = np.interp(fraction, positions, eased)
+        values[span] = v0 + (v1 - v0) * fraction
+    return values
 
 
 def set_keyframe(clip, prop: str, t_local: float, value: float, easing: str = "ease") -> list:

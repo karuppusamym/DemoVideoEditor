@@ -459,6 +459,7 @@ class MainWindow(QMainWindow):
         cv.ensure_visible(t)
         cv.update()
         self.update_title()
+        self.inspector.sync_curve_playhead(t)
         self._render()
 
     def zoom_fit(self):

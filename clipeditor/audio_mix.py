@@ -34,6 +34,17 @@ def _fade_ramp(clip, a: float, length: int, sr: int, fi: float, fo: float) -> np
     return g.astype(np.float32)
 
 
+def _add_segment(out, offset, samples, clip, track, start, sr, volume, keys):
+    gain = _fade_ramp(clip, start, len(samples), sr, *audio_fades(track, clip))
+    if keys:
+        volume = np.maximum(animate.sample_keyframes(keys, start - clip.start, len(samples), sr), 0.0)
+    if gain is not None:
+        volume = gain * volume
+    if isinstance(volume, np.ndarray):
+        volume = volume[:, None]
+    out[offset:offset + len(samples)] += samples * volume
+
+
 def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = False) -> np.ndarray:
     """wait=True (export) blocks until processed clip audio (audio_fx / speed) is ready."""
     sr = cache.sr
@@ -48,8 +59,9 @@ def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = Fal
             if clip.end <= t0 or clip.start >= t1:
                 continue
             asset = project.assets.get(clip.asset_id)
-            vol = animate.volume_at(clip, max(t0, clip.start))
-            if vol <= 0:
+            keys = animate.keyframes_for(clip, "volume")
+            vol = animate.volume_at(clip, max(t0, clip.start)) if not keys else clip.volume
+            if not keys and vol <= 0:
                 continue
             processed = audio_fx.clip_audio(clip, asset, cache, wait=wait) if audio_fx.active(clip) else None
             if processed is not None:
@@ -62,11 +74,7 @@ def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = Fal
                 if length <= 0 or i0 < 0:
                     continue
                 seg = processed[i0:i0 + length]
-                gain = _fade_ramp(clip, a, len(seg), sr, *audio_fades(track, clip))
-                if gain is None:
-                    out[o0:o0 + len(seg)] += seg * vol
-                else:
-                    out[o0:o0 + len(seg)] += seg * (gain * vol)[:, None]
+                _add_segment(out, o0, seg, clip, track, a, sr, vol, keys)
                 continue
             data = cache.get(clip.asset_id)
             if data is None or len(data) == 0:
@@ -101,10 +109,6 @@ def mix(project: Project, cache: AudioCache, t0: float, n: int, wait: bool = Fal
                 last = length - int(np.argmax(valid[::-1]))
                 seg = data[idx[first:last]]
                 off = o0 + first
-            gain = _fade_ramp(clip, a + (off - o0) / sr, len(seg), sr, *audio_fades(track, clip))
-            if gain is None:
-                out[off:off + len(seg)] += seg * vol
-            else:
-                out[off:off + len(seg)] += seg * (gain * vol)[:, None]
+            _add_segment(out, off, seg, clip, track, a + (off - o0) / sr, sr, vol, keys)
     np.clip(out, -1.0, 1.0, out=out)
     return out

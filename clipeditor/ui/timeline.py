@@ -379,6 +379,8 @@ class TimelineCanvas(QWidget):
             p.setBrush(QColor(255, 204, 64))
             p.setPen(QColor(40, 30, 0))
             for kt in all_keyframe_times(c):
+                if not 0 <= kt <= c.duration:
+                    continue
                 x = self.t2x(c.start + kt)
                 dm = QPainterPath()
                 dm.moveTo(x, r.bottom() - 10)
@@ -482,6 +484,7 @@ class TimelineCanvas(QWidget):
         self.drag = {
             "mode": mode, "clip": c.id, "snap": self.ed.snapshot(), "x0": pos.x(),
             "orig": (c.start, c.in_point, c.out_point), "track": tr.id, "moved": False,
+            "keyframes": c.keyframes,
             "pts": self.snap_points(c.id),
         }
 
@@ -537,12 +540,15 @@ class TimelineCanvas(QWidget):
                 tr.clips.remove(c)
                 target.clips.append(c)
         elif d["mode"] == "trim_l":
+            from ..animate import shift_keyframes
+
             ns, g = self.snap(start0 + dt, d["pts"])
             self.snap_x = g
             delta = ns - start0  # timeline seconds
             lo = -start0 if c.is_text else max(c.time_between(in0, 0.0), -start0)
             delta = min(max(delta, lo), c.time_between(in0, out0) - MIN_CLIP)
             c.start, c.in_point = start0 + delta, c.source_after(in0, delta)
+            c.keyframes = shift_keyframes(d["keyframes"], delta)
         elif d["mode"] == "trim_r":
             ne, g = self.snap(start0 + c.time_between(in0, out0) + dt, d["pts"])
             self.snap_x = g

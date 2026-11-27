@@ -44,7 +44,7 @@ Keep a project file and its media in the same folder tree to move them together.
 
 - **Left panel:** Media, Audio, Text, Stickers, Effects, Filters, Transitions, Animation and AI Magic. Effect and filter cards preview on the current frame.
 - **Center:** video preview and multitrack timeline.
-- **Right inspector:** Text, Shape, Video, Adjust, Mask & Key, Animation, Speed and Audio tabs. Animatable controls have keyframe buttons.
+- **Right inspector:** Text, Shape, Video, Adjust, Mask & Key, Animation, Keyframes, Speed and Audio tabs. Animatable controls have keyframe buttons.
 - **Timeline toolbar:** split, delete, duplicate, freeze, mirror, rotate, reverse, transition, text, frame tools and zoom.
 
 The editor also includes undo/redo, range editing, autosave and crash recovery, drag-and-drop import, proxy generation for high-resolution media, and a Ctrl+K command palette.
@@ -55,6 +55,7 @@ The editor also includes undo/redo, range editing, autosave and crash recovery, 
 - Add titles, shapes and emoji stickers. The galleries include 46 shape and emoji presets.
 - Use 32 video effects, 14 filter looks and 6 transitions. Masks, chroma key, 13 blend modes, crop, flip and rotation are also available.
 - Animate position, scale, rotation, opacity and volume with keyframes and easing. There are 42 in, out and loop animation presets.
+- Open **Keyframes** to edit an animation curve. Double-click to add a point, drag a diamond to change its time and value, or select a diamond and enter exact values. Choose outgoing easing to control the segment to the next point. Copy and paste a curve between clips to fit the same animation to a different duration.
 - Adjust colour, speed, fades and audio. In the **Speed** tab, set start, middle, and end speeds and click **Apply speed ramp**. Ramp audio follows the speed and changes pitch. Constant speed keeps pitch.
 - The built-in library contains 28 sound effects and 20 voice/music effects. Voiceover recording and offline text-to-speech are included.
 - Enable social safe-zone guides for TikTok/Reels framing.
@@ -102,4 +103,4 @@ ClipEditor source code is available under the [MIT License](LICENSE).
 
 ## Known gaps
 
-ClipEditor does not yet include a graphical keyframe curve editor, multiple timelines per project, voice cloning, mobile apps or translations. See [COMPARISON.md](COMPARISON.md) for a feature comparison and the current roadmap.
+ClipEditor does not yet include multiple timelines per project, voice cloning, mobile apps or translations. See [COMPARISON.md](COMPARISON.md) for a feature comparison and the current roadmap.

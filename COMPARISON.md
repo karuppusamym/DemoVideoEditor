@@ -1,6 +1,6 @@
 # ClipEditor vs. other video editors
 
-This is the v0.6 feature snapshot. ✅ means built and tested, 🟡 means partial, and ❌ means not yet built.
+✅ means built and tested, 🟡 means partial, and ❌ means not yet built.
 The entries for other products come from their public feature lists, so check them before you rely on them.
 
 ## Feature by feature, vs. Concat
@@ -10,7 +10,7 @@ The entries for other products come from their public feature lists, so check th
 | Multi-track timeline, split/trim/ripple, snapping | ✅ | ✅ also range editing (I/O), frame delete/duplicate/freeze, copy/paste |
 | Magnetic timeline option | ✅ | 🟡 ripple delete/remove-range; no always-on magnetic mode yet |
 | Multiple timelines per project | ✅ | ❌ |
-| Keyframes + curve editor | ✅ | ✅ keyframes on position/scale/rotation/opacity/volume, 7 easings · ❌ graphical curve editor |
+| Keyframes + curve editor | ✅ | ✅ graphical keyframes on position/scale/rotation/opacity/volume, 7 easings |
 | In / Out / Loop animations | ✅ | ✅ 16 in, 16 out, 10 loop |
 | Effects / filters / transitions | 100+ | ✅ 32 effects + 14 filter looks + 6 transitions (preview cards on your own frame) |
 | Sound effects | 25 | ✅ 28, synthesised in-app (no licensing questions) |
@@ -55,15 +55,14 @@ The entries for other products come from their public feature lists, so check th
 - The command palette, the safe-zone overlay and one-click silence removal are things most of these editors don't have.
 
 **Where it is clearly behind:**
-- Graphical keyframe curves, speed ramps and multiple timelines are missing.
+- Multiple timelines are missing.
 - Voice cloning and stem separation are missing.
 - There are no mobile apps and the UI is English only.
 - Export of heavily effected timelines is slower than in GPU-native engines, because the render engine runs in Python on the CPU.
 
 ## Next milestones (in order)
-1. A graphical keyframe curve editor
-2. Multiple timelines per project, plus nested sequences
-3. Stem separation (Demucs) and voice cloning (an open TTS such as XTTS/F5), as optional downloads
-4. A GPU/parallel render engine (multiprocess frame rendering, then an OpenGL compositor)
-5. A transition pack (wipes, zoom, blur, glitch: 30+) and an effect pack (to 100+)
-6. Translations, macOS/Linux packaging, installer
+1. Multiple timelines per project, plus nested sequences
+2. Stem separation (Demucs) and voice cloning (an open TTS such as XTTS/F5), as optional downloads
+3. A GPU/parallel render engine (multiprocess frame rendering, then an OpenGL compositor)
+4. A transition pack (wipes, zoom, blur, glitch: 30+) and an effect pack (to 100+)
+5. Translations, macOS/Linux packaging, installer
